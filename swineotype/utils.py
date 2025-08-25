@@ -14,3 +14,4 @@ def gzip_file(file_path: str):
             f_out.writelines(f_in)
     import os
     os.remove(file_path)
+

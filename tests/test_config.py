@@ -1,5 +1,7 @@
 from swineotype.config import load_config
+
 from unittest.mock import patch
+
 
 def test_load_config_defaults():
     config = load_config()
@@ -12,3 +14,4 @@ def test_load_config_env_vars():
         config = load_config()
         assert config["plurality"] == 0.75
         assert config["delta"] == 200
+

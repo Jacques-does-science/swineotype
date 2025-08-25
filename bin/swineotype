@@ -26,10 +26,12 @@ ROOT_DIR="${SWINEOTYPE_HOME:-$(cd "${BIN_DIR}/.." && pwd)}"
 # Support both layouts:
 #   A) <root>/{scripts,data}
 #   B) <root>/share/swineotype/{scripts,data}
+
 if [[ -d "${ROOT_DIR}/swineotype" && -d "${ROOT_DIR}/data" ]]; then
   SCRIPT_DIR="${ROOT_DIR}/swineotype"
   DATA_DIR="${ROOT_DIR}/data"
 elif [[ -d "${ROOT_DIR}/share/swineotype/swineotype" && -d "${ROOT_DIR}/share/swineotype/data" ]]; then
+
   SCRIPT_DIR="${ROOT_DIR}/share/swineotype/swineotype"
   DATA_DIR="${ROOT_DIR}/share/swineotype/data"
 else
