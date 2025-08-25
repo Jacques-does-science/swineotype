@@ -4,7 +4,9 @@ from collections import defaultdict
 from pathlib import Path
 
 from swineotype.blast import run_blast, make_db_if_needed, run
-from swineotype.utils import ensure_tool
+
+from swineotype.utils import ensure_tool, gzip_file
+
 
 def parse_whitelist_headers(fasta_path: str):
     allele_to_type = {}
@@ -33,7 +35,10 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
     stage1_tsv = run_dir / "wzxwzy_vs_asm.tsv"
     if config["keep_debug"]:
         stage1_tsv.write_text(tsv_text + ("\n" if tsv_text else ""))
-    best_by_q = {}
+
+        if config["gzip_debug"]:
+            gzip_file(stage1_tsv)
+
     score_by_type = defaultdict(float)
     for line in filter(None, tsv_text.splitlines()):
         qseqid, sseqid, pident, length, qlen, *_rest = line.split("\t")
@@ -43,8 +48,7 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
         bitscore = float(_rest[1])
         st = allele_to_type.get(qseqid)
         if st: score_by_type[st] += bitscore
-        if qseqid not in best_by_q or bitscore > best_by_q[qseqid]["bitscore"]:
-            best_by_q[qseqid] = {"bitscore": bitscore}
+
     ordered = sorted(score_by_type.items(), key=lambda kv: kv[1], reverse=True)
     top, top_score = (ordered[0][0], ordered[0][1]) if ordered else (None, 0.0)
     second, second_score = (ordered[1][0], ordered[1][1]) if len(ordered) > 1 else (None, 0.0)
@@ -61,7 +65,14 @@ def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, 
     db_prefix = make_db_if_needed(assembly_fa, config["tmp_dir"])
     outfmt = "6 qseqid sseqid pident length qlen evalue bitscore qstart qend sstart send"
     tsv_text = run_blast(resolver_refs_fa, db_prefix, threads, outfmt)
-    (run_dir / "resolver_vs_asm.tsv").write_text(tsv_text + ("\n" if tsv_text else ""))
+
+    if config["keep_debug"]:
+        stage2_tsv = run_dir / "resolver_vs_asm.tsv"
+        stage2_tsv.write_text(tsv_text + ("\n" if tsv_text else ""))
+        if config["gzip_debug"]:
+            gzip_file(stage2_tsv)
+
+
     best = None
     for line in filter(None, tsv_text.splitlines()):
         qseqid, sseqid, pident, length, qlen, evalue, bitscore, qstart, qend, sstart, send = line.split("\t")
