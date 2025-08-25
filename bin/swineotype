@@ -26,14 +26,14 @@ ROOT_DIR="${SWINEOTYPE_HOME:-$(cd "${BIN_DIR}/.." && pwd)}"
 # Support both layouts:
 #   A) <root>/{scripts,data}
 #   B) <root>/share/swineotype/{scripts,data}
-if [[ -d "${ROOT_DIR}/scripts" && -d "${ROOT_DIR}/data" ]]; then
-  SCRIPT_DIR="${ROOT_DIR}/scripts"
+if [[ -d "${ROOT_DIR}/swineotype" && -d "${ROOT_DIR}/data" ]]; then
+  SCRIPT_DIR="${ROOT_DIR}/swineotype"
   DATA_DIR="${ROOT_DIR}/data"
-elif [[ -d "${ROOT_DIR}/share/swineotype/scripts" && -d "${ROOT_DIR}/share/swineotype/data" ]]; then
-  SCRIPT_DIR="${ROOT_DIR}/share/swineotype/scripts"
+elif [[ -d "${ROOT_DIR}/share/swineotype/swineotype" && -d "${ROOT_DIR}/share/swineotype/data" ]]; then
+  SCRIPT_DIR="${ROOT_DIR}/share/swineotype/swineotype"
   DATA_DIR="${ROOT_DIR}/share/swineotype/data"
 else
-  echo "[ERROR] Could not locate 'scripts' and 'data' next to the wrapper." >&2
+  echo "[ERROR] Could not locate 'swineotype' and 'data' next to the wrapper." >&2
   echo "Set SWINEOTYPE_HOME to the swineotype root, e.g.:" >&2
   echo "  export SWINEOTYPE_HOME=/Users/jacquesolivier/envs/swineotype" >&2
   exit 1
@@ -44,13 +44,13 @@ TMP_DIR="${DATA_DIR}/tmp"
 mkdir -p "${TMP_DIR}"
 
 # Point swineotype at bundled references & temp dir
-export SWINEO_WZXWZY="${DATA_DIR}/wzxwzy_whitelist.fasta"
-export SWINEO_RESOLVER_REFS="${DATA_DIR}/cpsk_resolver_refs.fasta"
-export SWINEO_TMPDIR="${TMP_DIR}"
+export SWINEO_WZXWZY_FASTA="${DATA_DIR}/suis_wzxwzy_whitelist.fasta"
+export SWINEO_RESOLVER_REFS_FASTA="${DATA_DIR}/suis_resolver_refs.fasta"
+export SWINEO_TMP_DIR="${TMP_DIR}"
 
 # Defaults (can be overridden in env)
 export SWINEO_PLURALITY="${SWINEO_PLURALITY:-0.60}"
 export SWINEO_DELTA="${SWINEO_DELTA:-100}"
 export SWINEO_REQUIRE_AGREEMENT="${SWINEO_REQUIRE_AGREEMENT:-1}"
 
-exec python "${SCRIPT_DIR}/swineotype.py" "$@"
+exec python -m swineotype.main "$@"
