@@ -39,7 +39,6 @@ The installation is managed by a shell script that sets up a Conda environment.
 
 **Prerequisites**:
 -   A Conda distribution (Miniconda or Anaconda).
--   `git` for cloning the third-party workflow.
 
 To install, run the script from the repository root:
 ```bash
@@ -47,8 +46,7 @@ bash scripts/install_swineotype.sh
 ```
 This script will:
 1.  Create a Conda environment named `swineotype`.
-2.  Install all necessary dependencies (`blast`, `samtools`, `bcftools`, `kma`, `snakemake`, etc.).
-3.  Clone the `serovar_detector` repository into `third_party/`.
+2.  Install all necessary dependencies (`blast`, `samtools`, `bcftools`, `kma`, `snakemake`, `click`, `pyyaml`, `pytest`, etc.).
 
 To use the tool, activate the environment:
 ```bash
@@ -68,19 +66,43 @@ swineotype \
 
 ### APP Serotyping
 ```bash
-python adapters/app_serovar_detector_adapter.py \
+python -m swineotype.adapters.app \
   --assembly "/path/to/APP/*.fasta" \
   --out_dir "/path/to/results" \
   --threads 4
 ```
+
+## Configuration
+The tool can be configured via a `config.yaml` file. By default, it will look for a `config.yaml` file in the current directory. You can also specify a path to a custom config file using the `--config` option.
+
+The following options can be configured:
+- `data_dir`: The directory containing the data files.
+- `wzxwzy_fasta`: The name of the `wzx/wzy` whitelist FASTA file.
+- `resolver_refs_fasta`: The name of the resolver references FASTA file.
+- `tmp_dir`: The directory to use for temporary files.
+- `plurality`: The minimum fraction of the total score that the top hit must have to be considered decisive.
+- `delta`: The minimum difference between the top two hits to be considered decisive.
+- `require_agreement`: Whether to require that the top hits for `wzx` and `wzy` agree.
+- `min_pid`: The minimum percent identity for a BLAST hit to be considered.
+- `min_cov`: The minimum coverage for a BLAST hit to be considered.
+- `min_res_pid`: The minimum percent identity for a resolver BLAST hit to be considered.
+- `min_res_alen`: The minimum alignment length for a resolver BLAST hit to be considered.
+- `keep_debug`: Whether to keep the intermediate BLAST results.
+- `gzip_debug`: Whether to gzip the intermediate BLAST results.
+- `clean_temp`: Whether to clean the temporary directory after running.
 
 ## File & Folder Philosophy
 The project is organized to separate curated data, custom scripts, external code, and run-specific outputs.
 ```
 swineotype/
 ├─ bin/                      # Entrypoints
-├─ scripts/                  # Native pipeline logic (swineotype.py)
-├─ adapters/                 # Glue for third-party workflows
+├─ swineotype/               # Core Python package
+│  ├─ adapters/              # Glue for third-party workflows
+│  ├─ __init__.py
+│  ├─ blast.py
+│  ├─ config.py
+│  ├─ main.py
+│  └─ stages.py
 ├─ data/                     # Curated biological references (stable)
 ├─ third_party/              # Vendored external tools (unmodified)
 └─ results/                  # Ephemeral outputs (run-specific)

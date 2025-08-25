@@ -6,22 +6,22 @@ from pathlib import Path
 from glob import glob
 import pandas as pd
 import yaml
+import click
 
 def log(msg: str):
-    print(f"[INFO] {msg}", flush=True)
+    click.echo(f"[INFO] {msg}", flush=True)
 
 def err(msg: str):
-    print(f"[ERROR] {msg}", file=sys.stderr, flush=True)
+    click.echo(f"[ERROR] {msg}", file=sys.stderr, flush=True)
 
-def main():
-    parser = argparse.ArgumentParser(description="Adapter for APP serovar detection + merge with swineotype")
-    parser.add_argument("--assembly", required=True, help="Glob for input assemblies (*.fasta)")
-    parser.add_argument("--out_dir", required=True, help="Output directory base")
-    parser.add_argument("--threads", type=int, default=4, help="Threads for Snakemake/KMA")
-    parser.add_argument("--swineotype_summary", help="Path to swineotype summary TSV/CSV to merge with APP results")
-    args = parser.parse_args()
-
-    outdir = Path(args.out_dir).resolve()
+@click.command()
+@click.argument("assembly", required=True)
+@click.option("--out_dir", required=True, help="Output directory base")
+@click.option("--threads", type=int, default=4, help="Threads for Snakemake/KMA")
+@click.option("--swineotype_summary", help="Path to swineotype summary TSV/CSV to merge with APP results")
+def main(assembly, out_dir, threads, swineotype_summary):
+    """Adapter for APP serovar detection + merge with swineotype"""
+    outdir = Path(out_dir).resolve()
     app_dir = outdir / "app_detector"
     results_dir = app_dir / "results"
     tmp_dir = app_dir / "tmp"
@@ -33,10 +33,10 @@ def main():
         d.mkdir(parents=True, exist_ok=True)
 
     # --- FIX: expand absolute glob patterns safely ---
-    pattern = args.assembly.strip('"').strip("'")
+    pattern = assembly.strip('"').strip("'")
     assemblies = [Path(p).resolve() for p in glob(pattern)]
     if not assemblies:
-        err(f"No assemblies found for pattern: {args.assembly}")
+        err(f"No assemblies found for pattern: {assembly}")
         sys.exit(1)
     log(f"Found {len(assemblies)} assemblies")
 
@@ -49,7 +49,7 @@ def main():
     log(f"Wrote samples table with {len(assemblies)} assemblies → {samples_tsv}")
 
     # KMA DB prefix (must exist): .../third_party/serovar_detector/db/Actinobacillus_pleuropneumoniae.*
-    third_party = outdir.parent / "third_party" / "serovar_detector"
+    third_party = Path(__file__).parent.parent.parent / "third_party" / "serovar_detector"
     db_dir = third_party / "db"
     db_prefix = db_dir / "Actinobacillus_pleuropneumoniae"
     if not (db_prefix.with_suffix(".fasta").exists()
@@ -82,7 +82,7 @@ def main():
         "append_results": False,
         "database": str(db_prefix),
         "samples": str(samples_tsv),
-        "threads": int(args.threads),
+        "threads": int(threads),
         "threshold": 98.0,
         "debug": False,
         "project_config": str(project_cfg),
@@ -106,7 +106,7 @@ def main():
         "snakemake",
         "-s", str(snakefile),
         "--configfile", str(config_yaml),
-        "--cores", str(args.threads),
+        "--cores", str(threads),
         "--directory", str(app_dir),
         "--use-conda",
     ]
@@ -123,8 +123,8 @@ def main():
         sys.exit(1)
 
     # Optional merge with swineotype summary
-    if args.swineotype_summary:
-        swineo = Path(args.swineotype_summary).resolve()
+    if swineotype_summary:
+        swineo = Path(swineotype_summary).resolve()
         if not swineo.exists():
             err(f"Swineotype summary not found: {swineo}")
             sys.exit(1)
