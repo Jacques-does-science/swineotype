@@ -52,7 +52,7 @@ def expand_globs(paths: list[str]) -> list[str]:
     return out
 
 @click.command()
-@click.argument("assembly", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--assembly", multiple=True, required=True, type=click.Path(), help="Path to one or more assembly files. Globs are supported.")
 @click.option("--out_dir", required=True, type=click.Path(), help="Output directory")
 @click.option("--merged_csv", default=None, type=click.Path(), help="Path to merge results into a single CSV file")
 @click.option("--threads", default=lambda: max(1, os.cpu_count() // 2), help="Number of threads to use")
@@ -64,7 +64,7 @@ def main(assembly, out_dir, merged_csv, threads, species, config):
 
     if species=="app":
         app_main(
-            assembly=" ".join(assembly),
+            assembly=list(assembly),
             out_dir=out_dir,
             threads=threads,
             swineotype_summary=merged_csv,
@@ -73,7 +73,7 @@ def main(assembly, out_dir, merged_csv, threads, species, config):
 
     out_dir = Path(out_dir).resolve(); out_dir.mkdir(parents=True, exist_ok=True)
     for tool in ("blastn","makeblastdb","samtools"): ensure_tool(tool)
-    assemblies = expand_globs(assembly)
+    assemblies = expand_globs(list(assembly))
     merged_rows = []
     with click.progressbar(assemblies, label="Serotyping assemblies") as bar:
         for asm in bar:
