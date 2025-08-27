@@ -35,23 +35,38 @@ The adapter's role is to automate the setup process by:
 
 ## Installation
 
-The installation is managed by a shell script that sets up a Conda environment.
+Follow these steps to set up `swineotype` on your local machine.
 
 **Prerequisites**:
--   A Conda distribution (Miniconda or Anaconda).
+-   You must have a Conda distribution (Miniconda or Anaconda) installed. For installation instructions, please see the [official Conda documentation](https://conda.io/projects/conda/en/latest/user-guide/install/index.html).
+-   You will also need `git` to clone the repository.
 
-To install, run the script from the repository root:
-```bash
-bash scripts/install_swineotype.sh
-```
-This script will:
-1.  Create a Conda environment named `swineotype`.
-2.  Install all necessary dependencies (`blast`, `samtools`, `bcftools`, `kma`, `snakemake`, `click`, `pyyaml`, `pytest`, etc.).
+**Step-by-step instructions**:
 
-To use the tool, activate the environment:
-```bash
-conda activate swineotype
-```
+1.  **Clone the repository**:
+    Open your terminal and run the following command to clone the repository to your local machine:
+    ```bash
+    git clone https://github.com/Jacques-does-science/swineotype.git
+    ```
+
+2.  **Navigate to the project directory**:
+    ```bash
+    cd swineotype
+    ```
+
+3.  **Run the installation script**:
+    This script will create a dedicated Conda environment with all the necessary dependencies.
+    ```bash
+    bash scripts/install_swineotype.sh
+    ```
+
+4.  **Activate the Conda environment**:
+    To start using the tools, you must activate the `swineotype` environment:
+    ```bash
+    conda activate swineotype
+    ```
+
+After these steps, you will be ready to use `swineotype`.
 
 ## Usage
 
