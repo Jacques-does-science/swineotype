@@ -16,7 +16,9 @@ def log(msg: str):
 def err(msg: str):
     click.echo(f"[ERROR] {msg}", file=sys.stderr)
 
+
 def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype_summary: Optional[str]):
+
     """Adapter for APP serovar detection + merge with swineotype"""
     outdir = Path(out_dir).resolve()
     app_dir = outdir / "app_detector"
