@@ -40,8 +40,8 @@ def test_main_cli_multiple_assemblies(mock_ensure_tool, mock_process_one):
         assert mock_process_one.call_count == 2
 
 
-@patch("swineotype.main.app_main")
-def test_main_cli_app(mock_app_main):
+@patch("swineotype.main.run_app_analysis")
+def test_main_cli_app(mock_run_app_analysis):
     runner = CliRunner()
     with runner.isolated_filesystem():
         with open("a.fasta", "w") as f:
@@ -50,7 +50,7 @@ def test_main_cli_app(mock_app_main):
             f.write(">b\nACGT")
         result = runner.invoke(main, ["--species", "app", "--out_dir", "out", "--assembly", "*.fasta"])
         assert result.exit_code == 0
-        mock_app_main.assert_called_once()
+        mock_run_app_analysis.assert_called_once()
         # The first argument of the first call to the mock
-        called_args, called_kwargs = mock_app_main.call_args
+        called_args, called_kwargs = mock_run_app_analysis.call_args
         assert called_kwargs['assembly'] == ['*.fasta']

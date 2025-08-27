@@ -13,7 +13,7 @@ from pathlib import Path
 
 from swineotype.stages import stage1_score, stage2_resolver_call, interpret_resolver
 from swineotype.config import load_config
-from swineotype.adapters.app import main as app_main
+from swineotype.adapters.app import run_app_analysis
 from swineotype.utils import ensure_tool
 
 # -------- Main orchestration --------
@@ -63,7 +63,7 @@ def main(assembly, out_dir, merged_csv, threads, species, config):
     config = load_config(config)
 
     if species=="app":
-        app_main(
+        run_app_analysis(
             assembly=list(assembly),
             out_dir=out_dir,
             threads=threads,
