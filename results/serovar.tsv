@@ -1,4 +1,0 @@
-Sample	Date	Suggested_serovar	Frequency	Serovar_match	Serovar_partial	Others_match	Others_partial
-APP201assembly	2025-08-22	S2	7 of 7	cps2A, cps2B, cps2C, cps2D, cps2E, cps2F, cps2G			
-APP802assembly	2025-08-22	S8	8 of 8	cps8A, cps2B, cps8C, cps8D, cps8E, cps8F, cps8G, cps8H			
-APP803assembly	2025-08-22	S8	8 of 8	cps8A, cps2B (100.23% COV), cps8C, cps8D, cps8E (100.1% COV), cps8F, cps8G (99.94% ID), cps8H			
