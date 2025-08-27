@@ -4,22 +4,19 @@ import subprocess
 import sys
 from pathlib import Path
 from glob import glob
+from typing import Optional, List
+
 import pandas as pd
 import yaml
 import click
 
 def log(msg: str):
-    click.echo(f"[INFO] {msg}", flush=True)
+    click.echo(f"[INFO] {msg}")
 
 def err(msg: str):
-    click.echo(f"[ERROR] {msg}", file=sys.stderr, flush=True)
+    click.echo(f"[ERROR] {msg}", file=sys.stderr)
 
-@click.command()
-@click.argument("assembly", required=True)
-@click.option("--out_dir", required=True, help="Output directory base")
-@click.option("--threads", type=int, default=4, help="Threads for Snakemake/KMA")
-@click.option("--swineotype_summary", help="Path to swineotype summary TSV/CSV to merge with APP results")
-def main(assembly, out_dir, threads, swineotype_summary):
+def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype_summary: Optional[str]):
     """Adapter for APP serovar detection + merge with swineotype"""
     outdir = Path(out_dir).resolve()
     app_dir = outdir / "app_detector"
@@ -33,10 +30,13 @@ def main(assembly, out_dir, threads, swineotype_summary):
         d.mkdir(parents=True, exist_ok=True)
 
     # --- FIX: expand absolute glob patterns safely ---
-    pattern = assembly.strip('"').strip("'")
-    assemblies = [Path(p).resolve() for p in glob(pattern)]
+    assemblies = []
+    for p in assembly:
+        pattern = p.strip('"').strip("'")
+        assemblies.extend(Path(g).resolve() for g in glob(pattern))
+
     if not assemblies:
-        err(f"No assemblies found for pattern: {assembly}")
+        err(f"No assemblies found for pattern(s): {', '.join(assembly)}")
         sys.exit(1)
     log(f"Found {len(assemblies)} assemblies")
 
@@ -146,6 +146,20 @@ def main(assembly, out_dir, threads, swineotype_summary):
         merged_out = results_dir / "combined_summary.tsv"
         merged.to_csv(merged_out, sep="\t", index=False)
         log(f"[SUCCESS] Combined summary written → {merged_out}")
+
+@click.command()
+@click.option("--assembly", multiple=True, required=True, help="Path to one or more assembly files or glob patterns.")
+@click.option("--out_dir", required=True, help="Output directory base")
+@click.option("--threads", type=int, default=4, help="Threads for Snakemake/KMA")
+@click.option("--swineotype_summary", help="Path to swineotype summary TSV/CSV to merge with APP results")
+def main(assembly, out_dir, threads, swineotype_summary):
+    """Adapter for APP serovar detection + merge with swineotype"""
+    run_app_analysis(
+        assembly=list(assembly),
+        out_dir=out_dir,
+        threads=threads,
+        swineotype_summary=swineotype_summary
+    )
 
 if __name__ == "__main__":
     main()
