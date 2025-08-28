@@ -42,13 +42,14 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
         sys.exit(1)
     log(f"Found {len(assemblies)} assemblies")
 
-    # Write samples.tsv for Snakemake
-    samples_tsv = app_dir / "samples.tsv"
-    with open(samples_tsv, "w") as fh:
-        fh.write("sample_name\tassembly\ttype\n")
+    # Write sample_sheet.csv for Snakemake/peppy
+    sample_sheet_csv = schemas_dir / "sample_sheet.csv"
+    with open(sample_sheet_csv, "w") as fh:
+        fh.write("sample_name,type\n")
         for fa in assemblies:
-            fh.write(f"{fa.stem}\t{fa}\tAssembly\n")
-    log(f"Wrote samples table with {len(assemblies)} assemblies → {samples_tsv}")
+            fh.write(f"{fa.stem},Assembly\n")
+    log(f"Wrote samples table with {len(assemblies)} assemblies → {sample_sheet_csv}")
+
 
     # KMA DB prefix (must exist): .../third_party/serovar_detector/db/Actinobacillus_pleuropneumoniae.*
     third_party = Path(__file__).parent.parent.parent / "third_party" / "serovar_detector"
@@ -68,13 +69,13 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
         err(f"Missing serovar profiles YAML: {serovar_profiles}")
         sys.exit(1)
 
+    # Create the peppy project config, which will live in the schemas_dir
     project_cfg = schemas_dir / "project_config.yaml"
     if not project_cfg.exists():
-        # Minimal PEP config to satisfy Snakefile/peppy, not actually used for samples here.
         project_cfg.write_text(
             "pep_version: 2.1.0\n"
             "name: app_serovar_project\n"
-            "samples: ../samples.tsv\n"
+            "sample_table: sample_sheet.csv\n"  # Points to the CSV in the same directory
         )
 
     config_yaml = config_dir / "config.yaml"
@@ -83,12 +84,9 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
         "tmpdir": str(tmp_dir),
         "append_results": False,
         "database": str(db_prefix),
-        "samples": str(samples_tsv),
         "threads": int(threads),
         "threshold": 98.0,
         "debug": False,
-        "project_config": str(project_cfg),
-        "type": "Assembly",
         "serovar_profiles": str(serovar_profiles),
         "summary_file": str(results_dir / "serovar_summary.tsv"),
         "log_dir": str(logs_dir),
@@ -101,6 +99,22 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
 
     log("[INFO] Effective config.yaml contents:")
     print(yaml.dump(config, sort_keys=False))
+
+    # Create symlinks for the assembly files in the tmp directory, which is what
+    # the serovar_detector workflow expects.
+    assembly_tmp_dir = tmp_dir / "assemblies"
+    assembly_tmp_dir.mkdir(parents=True, exist_ok=True)
+    log(f"Creating symlinks for assemblies in {assembly_tmp_dir}")
+    for asm_path in assemblies:
+        symlink_path = assembly_tmp_dir / asm_path.name
+        if not symlink_path.exists():
+            symlink_path.symlink_to(asm_path)
+        else:
+            # Overwrite if it's a broken link, for example
+            if not symlink_path.resolve(strict=False).exists():
+                symlink_path.unlink()
+                symlink_path.symlink_to(asm_path)
+
 
     # Run Snakemake
     snakefile = third_party / "workflow" / "Snakefile"

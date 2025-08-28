@@ -54,13 +54,20 @@ Follow these steps to set up `swineotype` on your local machine.
     cd swineotype
     ```
 
-3.  **Run the installation script**:
+3.  **Install the `serovar_detector` dependency**:
+    The APP serotyping module requires a third-party tool, `serovar_detector`. You must clone it into the `third_party` directory as follows:
+    ```bash
+    git clone --branch dev https://github.com/KasperThystrup/serovar_detector.git third_party/serovar_detector
+    ```
+    *Note: This step is necessary because `serovar_detector` is not packaged as a distributable dependency. `swineotype` is designed to look for it in the `third_party` directory.*
+
+4.  **Run the installation script**:
     This script will create a dedicated Conda environment with all the necessary dependencies.
     ```bash
     bash scripts/install_swineotype.sh
     ```
 
-4.  **Activate the Conda environment**:
+5.  **Activate the Conda environment**:
     To start using the tools, you must activate the `swineotype` environment:
     ```bash
     conda activate swineotype
