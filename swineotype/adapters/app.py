@@ -100,6 +100,22 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
     log("[INFO] Effective config.yaml contents:")
     print(yaml.dump(config, sort_keys=False))
 
+    # Create symlinks for the assembly files in the tmp directory, which is what
+    # the serovar_detector workflow expects.
+    assembly_tmp_dir = tmp_dir / "assemblies"
+    assembly_tmp_dir.mkdir(parents=True, exist_ok=True)
+    log(f"Creating symlinks for assemblies in {assembly_tmp_dir}")
+    for asm_path in assemblies:
+        symlink_path = assembly_tmp_dir / asm_path.name
+        if not symlink_path.exists():
+            symlink_path.symlink_to(asm_path)
+        else:
+            # Overwrite if it's a broken link, for example
+            if not symlink_path.resolve(strict=False).exists():
+                symlink_path.unlink()
+                symlink_path.symlink_to(asm_path)
+
+
     # Run Snakemake
     snakefile = third_party / "workflow" / "Snakefile"
     cmd = [
