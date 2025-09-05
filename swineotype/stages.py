@@ -111,23 +111,27 @@ def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, 
 def interpret_resolver(ev: dict|None, config: dict) -> str|None:
     if ev is None: return None
     meta = parse_resolver_meta(ev["ref_id"])
-    if meta["pair"] == "1_vs_14":
-        return meta["A"] if ev["base"] == meta["baseA"] else meta["B"]
-    if meta["pair"] == "2_vs_1_2":
-        return meta["A"] if ev["base"] == meta["baseA"] else meta["B"]
+    base = ev["base"]
+    if base == "G":
+        return meta.get("G_serotype")
+    elif base in ("C", "T"):
+        return meta.get("CT_serotype")
     return None
 
 def parse_resolver_meta(qid: str):
     """
     Parse resolver FASTA IDs of the form:
-      >id|pair=1_vs_14|pos=483|baseA=G|A=1|B=14
-    Returns dict with keys: pair, pos, baseA, A, B
+      >id|pair=1_vs_14|pos=481|G_serotype=14|CT_serotype=1
+    Returns dict with keys: pair, pos, G_serotype, CT_serotype
     """
-    meta = {"pair": None, "pos": None, "baseA": "G", "A": None, "B": None}
+    meta = {"pair": None, "pos": None, "G_serotype": None, "CT_serotype": None}
     for tok in qid.split("|")[1:]:
-        if tok.startswith("pair="):   meta["pair"]   = tok.split("=",1)[1]
-        elif tok.startswith("pos="):  meta["pos"]    = int(tok.split("=",1)[1])
-        elif tok.startswith("baseA="):meta["baseA"]  = tok.split("=",1)[1].upper()
-        elif tok.startswith("A="):    meta["A"]      = tok.split("=",1)[1]
-        elif tok.startswith("B="):    meta["B"]      = tok.split("=",1)[1]
+        if tok.startswith("pair="):
+            meta["pair"] = tok.split("=", 1)[1]
+        elif tok.startswith("pos="):
+            meta["pos"] = int(tok.split("=", 1)[1])
+        elif tok.startswith("G_serotype="):
+            meta["G_serotype"] = tok.split("=", 1)[1]
+        elif tok.startswith("CT_serotype="):
+            meta["CT_serotype"] = tok.split("=", 1)[1]
     return meta
