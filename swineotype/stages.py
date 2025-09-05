@@ -104,9 +104,9 @@ def interpret_resolver(ev: dict|None, config: dict) -> str|None:
     if ev is None: return None
     meta = parse_resolver_meta(ev["ref_id"])
     if meta["pair"] == "1_vs_14":
-        return meta["B"] if ev["base"] == meta["baseA"] else meta["A"]
+        return meta["A"] if ev["base"] == meta["baseA"] else meta["B"]
     if meta["pair"] == "2_vs_1_2":
-        return meta["B"] if ev["base"] == meta["baseA"] else meta["A"]
+        return meta["A"] if ev["base"] == meta["baseA"] else meta["B"]
     return None
 
 def parse_resolver_meta(qid: str):
