@@ -8,6 +8,11 @@ from swineotype.blast import run_blast, make_db_if_needed, run
 from swineotype.utils import ensure_tool, gzip_file
 
 
+def reverse_complement(base: str) -> str:
+    """Returns the reverse complement of a single DNA base."""
+    comp = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+    return comp.get(base.upper(), 'N')
+
 def parse_whitelist_headers(fasta_path: str):
     allele_to_type = {}
     allele_to_geneclass = {}
@@ -96,7 +101,10 @@ def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, 
     region = f"{ev['contig']}:{ev['contig_pos']}-{ev['contig_pos']}"
     fa = run(["samtools","faidx",assembly_fa,region])
     lines = [ln.strip() for ln in fa.splitlines()]
-    ev["base"] = lines[1].strip().upper() if len(lines)>1 else "N"
+    base = lines[1].strip().upper() if len(lines)>1 else "N"
+    if ev["strand"] == "-":
+        base = reverse_complement(base)
+    ev["base"] = base
     return ev
 
 
