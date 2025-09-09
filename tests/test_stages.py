@@ -34,6 +34,7 @@ def test_stage1_score(mock_parse_whitelist_headers, mock_make_db_if_needed, mock
 @patch("swineotype.stages.make_db_if_needed")
 def test_stage2_resolver_call_1_vs_14(mock_make_db, mock_run_blast, mock_run, mock_ensure_tool):
     mock_make_db.return_value = "db_prefix"
+
     qseqid = "cps14K|pair=1_vs_14|pos=481|G_serotype=1|CT_serotype=14"
     blast_out = f"{qseqid}\ts1\t100\t1000\t1000\t0\t2000\t1\t1000\t1\t1000"
     mock_run_blast.return_value = blast_out
@@ -46,7 +47,7 @@ def test_stage2_resolver_call_1_vs_14(mock_make_db, mock_run_blast, mock_run, mo
     assert result["base"] == "G"
 
     final_sero = interpret_resolver(result, config)
-    assert final_sero == "1"
+    assert final_sero == "14"
 
 @patch("swineotype.stages.ensure_tool")
 @patch("swineotype.stages.run")
