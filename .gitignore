@@ -159,7 +159,6 @@ cython_debug/
 *.bigWig
 .DS_Store
 results/
-third_party/
 *.log
 *.tsv
 *.csv
