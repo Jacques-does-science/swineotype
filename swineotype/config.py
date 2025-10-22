@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import yaml
+import site
 
 # --- Default Configuration ---
 
@@ -26,11 +27,45 @@ DEFAULT_CONFIG = {
 
 # --- Configuration Loading ---
 
+def get_root_dir() -> Path:
+    """
+    Finds the project root directory.
+
+    The logic is as follows:
+    1. If SWINEOTYPE_HOME is set, use it.
+    2. Check for a `data` directory next to the `swineotype` package.
+       This works for editable installs (`pip install -e .`).
+    3. Check for a `data` directory in `sys.prefix` for standard installs.
+    """
+    if "SWINEOTYPE_HOME" in os.environ:
+        return Path(os.environ["SWINEOTYPE_HOME"])
+
+    package_path = Path(__file__).parent
+
+    # Editable install: <root>/swineotype
+    editable_install_data_path = package_path.parent / "data"
+    if editable_install_data_path.exists():
+        return package_path.parent
+
+    # Standard install: <prefix>/lib/pythonX.Y/site-packages/swineotype
+    # and <prefix>/share/swineotype/data
+    for sp_path in site.getsitepackages():
+        if package_path.is_relative_to(sp_path):
+            prefix = Path(sp_path).parent.parent.parent
+            share_data_path = prefix / "share" / "swineotype" / "data"
+            if share_data_path.exists():
+                return prefix / "share" / "swineotype"
+
+    raise FileNotFoundError("Could not locate the `data` directory. "
+                            "Please set the SWINEOTYPE_HOME environment variable.")
+
+
 def load_config(config_file: str | None = None) -> dict:
     """
     Loads configuration from a YAML file, filling in with defaults.
     """
     config = DEFAULT_CONFIG.copy()
+    root_dir = get_root_dir()
 
     if config_file:
         with open(config_file, "r") as f:
@@ -47,10 +82,10 @@ def load_config(config_file: str | None = None) -> dict:
 
     # --- Path Resolution ---
 
-    config["data_dir"] = Path(config["data_dir"]).resolve()
+    config["data_dir"] = root_dir / "data"
     config["wzxwzy_fasta"] = config["data_dir"] / config["wzxwzy_fasta"]
     config["resolver_refs_fasta"] = config["data_dir"] / config["resolver_refs_fasta"]
-    config["tmp_dir"] = Path(config["tmp_dir"]).resolve()
+    config["tmp_dir"] = config["data_dir"] / "tmp"
     config["tmp_dir"].mkdir(parents=True, exist_ok=True)
 
     return config
