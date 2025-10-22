@@ -29,6 +29,9 @@ conda install -n "$ENV_NAME" -c conda-forge -c bioconda \
     click \
     pytest -y
 
+echo "==> Installing swineotype"
+conda run -n "$ENV_NAME" pip install .
+
 echo "==> Done."
 echo
 echo "To use swineotype, run:"
