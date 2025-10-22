@@ -62,7 +62,7 @@ Follow these steps to set up `swineotype` on your local machine.
     *Note: This step is necessary because `serovar_detector` is not packaged as a distributable dependency. `swineotype` is designed to look for it in the `third_party` directory.*
 
 4.  **Run the installation script**:
-    This script will create a dedicated Conda environment with all the necessary dependencies and install the `swineotype` package.
+    This script will create a dedicated Conda environment with all the necessary dependencies and install the `swineotype` package using the `setup.py` file. This makes the `swineotype` command available in your environment.
     ```bash
     bash scripts/install_swineotype.sh
     ```
