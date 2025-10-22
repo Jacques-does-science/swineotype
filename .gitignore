@@ -166,3 +166,4 @@ results/
 /data/
 !/data/suis_resolver_refs.fasta
 !/data/suis_wzxwzy_whitelist.fasta
+data/tmp

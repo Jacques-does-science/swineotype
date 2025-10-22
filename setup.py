@@ -1,5 +1,8 @@
 from setuptools import setup, find_packages
 import glob
+import os
+
+data_files = [f for f in glob.glob('data/*') if os.path.isfile(f)]
 
 setup(
     name='swineotype',
@@ -11,5 +14,5 @@ setup(
             'swineotype = swineotype.main:main',
         ],
     },
-    data_files=[('share/swineotype/data', glob.glob('data/*'))]
+    data_files=[('share/swineotype/data', data_files)]
 )
