@@ -64,10 +64,15 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
     log(f"Using KMA DB prefix: {db_prefix}")
 
     # Paths in config
+    # ...
     serovar_profiles = third_party / "config" / "serovar_profiles.yaml"
     if not serovar_profiles.exists():
         err(f"Missing serovar profiles YAML: {serovar_profiles}")
         sys.exit(1)
+
+    # Copy serovar_profiles to config_dir for the R script
+    import shutil
+    shutil.copy(serovar_profiles, config_dir / "serovar_profiles.yaml")
 
     # Create the peppy project config, which will live in the schemas_dir
     project_cfg = schemas_dir / "project_config.yaml"

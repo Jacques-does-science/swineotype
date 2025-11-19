@@ -27,10 +27,15 @@ conda install -n "$ENV_NAME" -c conda-forge -c bioconda \
     snakemake \
     kma \
     click \
-    pytest -y
+    pytest \
+    peppy -y
 
 echo "==> Installing swineotype"
-conda run -n "$ENV_NAME" pip install .
+conda run -n "$ENV_NAME" pip install -e .
+
+echo "==> Note: If you have system R installed (e.g., via Homebrew),"
+echo "    you may need to install R packages manually:"
+echo "    R -e 'install.packages(c(\"dplyr\", \"purrr\", \"readr\", \"stringr\", \"tidyr\", \"tibble\", \"yaml\", \"logger\"), repos=\"https://cloud.r-project.org\")'"
 
 echo "==> Done."
 echo

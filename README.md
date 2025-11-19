@@ -57,9 +57,9 @@ Follow these steps to set up `swineotype` on your local machine.
 3.  **Install the `serovar_detector` dependency**:
     The APP serotyping module requires a third-party tool, `serovar_detector`. You must clone it into the `third_party` directory as follows:
     ```bash
-    git clone --branch dev https://github.com/KasperThystrup/serovar_detector.git third_party/serovar_detector
+    git clone --branch dev https://github.com/Jacques-does-science/serovar_detector.git third_party/serovar_detector
     ```
-    *Note: This step is necessary because `serovar_detector` is not packaged as a distributable dependency. `swineotype` is designed to look for it in the `third_party` directory.*
+    *Note: This is a fork of the original `KasperThystrup/serovar_detector` with bug fixes for R dependencies and variable naming. `swineotype` is designed to look for it in the `third_party` directory.*
 
 4.  **Run the installation script**:
 
