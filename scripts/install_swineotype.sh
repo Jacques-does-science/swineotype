@@ -13,6 +13,13 @@ fi
 
 echo "==> Creating conda environment: $ENV_NAME"
 
+# Initialize submodule if needed
+if [ -z "$(ls -A third_party/serovar_detector)" ]; then
+    echo "==> Initializing serovar_detector submodule..."
+    git submodule update --init --recursive
+fi
+
+
 # Create a new environment with Python 3.11
 conda create -n "$ENV_NAME" python=3.11 -y
 

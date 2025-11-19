@@ -1,3 +1,3 @@
 [submodule "third_party/serovar_detector"]
 	path = third_party/serovar_detector
-	url = https://github.com/KasperThystrup/serovar_detector.git
+	url = https://github.com/Jacques-does-science/serovar_detector.git
