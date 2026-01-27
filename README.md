@@ -75,15 +75,15 @@ After these steps, you will be ready to use `swineotype`. The `swineotype` comma
 
 `swineotype` can serotype both *S. suis* and *A. pleuropneumoniae* (APP). You can specify the target species using the `--species` flag.
 
-### *S. suis* Serotyping (default)
+### *S. suis* Serotyping
 ```bash
 swineotype \
+  --species suis \
   --assembly "/path/to/Ssuis/*.fasta" \
   --out_dir /path/to/results \
   --merged_csv /path/to/results/swineotype_summary.csv \
   --threads 4
 ```
-*Note: `--species suis` is the default and can be omitted.*
 
 ### APP Serotyping
 ```bash
@@ -91,6 +91,7 @@ swineotype \
   --species app \
   --assembly "/path/to/APP/*.fasta" \
   --out_dir "/path/to/results" \
+  --merged_csv "/path/to/results/app_summary.csv" \
   --threads 4
 ```
 

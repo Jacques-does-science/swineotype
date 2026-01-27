@@ -44,15 +44,66 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
         if config["gzip_debug"]:
             gzip_file(stage1_tsv)
 
-    score_by_type = defaultdict(float)
+    hits = defaultdict(list)
     for line in filter(None, tsv_text.splitlines()):
-        qseqid, sseqid, pident, length, qlen, *_rest = line.split("\t")
-        pident, length, qlen = float(pident), int(length), int(qlen)
-        coverage = (length / qlen) if qlen else 0
-        if pident < config["min_pid"] or coverage < config["min_cov"]: continue
-        bitscore = float(_rest[1])
+        parts = line.split("\t")
+        if len(parts) < 11: continue
+        qseqid, sseqid, pident, length, qlen, evalue, bitscore, qstart, qend, sstart, send = parts
+        # Group by qseqid ONLY (ignore sseqid/contig to handle genes split across contigs)
+        hits[qseqid].append({
+            "pident": float(pident),
+            "length": int(length),
+            "qlen": int(qlen),
+            "bitscore": float(bitscore),
+            "qstart": int(qstart),
+            "qend": int(qend)
+        })
+
+    score_by_type = defaultdict(float)
+    
+    best_rejected_info = None
+
+    for qseqid, hsp_list in hits.items():
+        # 1. Calculate total query coverage by merging intervals
+        intervals = sorted([(h["qstart"], h["qend"]) for h in hsp_list])
+        merged = []
+        if intervals:
+            curr_start, curr_end = intervals[0]
+            for next_start, next_end in intervals[1:]:
+                if next_start <= curr_end + 1: # overlapping or adjacent
+                    curr_end = max(curr_end, next_end)
+                else:
+                    merged.append((curr_start, curr_end))
+                    curr_start, curr_end = next_start, next_end
+            merged.append((curr_start, curr_end))
+        
+        covered_len = sum(e - s + 1 for s, e in merged)
+        qlen = hsp_list[0]["qlen"]
+        coverage = (covered_len / qlen) if qlen else 0.0
+
+        # 2. Calculate weighted PID (length-weighted)
+        total_aligned_len = sum(h["length"] for h in hsp_list)
+        weighted_pid_sum = sum(h["pident"] * h["length"] for h in hsp_list)
+        avg_pid = (weighted_pid_sum / total_aligned_len) if total_aligned_len else 0.0
+
+        # 3. Filter
+        if avg_pid < config["min_pid"] or coverage < config["min_cov"]:
+            # Diagnostic for best rejected
+            info = f"{qseqid}: Cov={coverage:.2f} Pid={avg_pid:.1f}"
+            if best_rejected_info is None or coverage > float(best_rejected_info.split("Cov=")[1].split()[0]):
+                 best_rejected_info = info
+            continue
+
+        # 4. Sum bitscore
+        total_bitscore = sum(h["bitscore"] for h in hsp_list)
+        
         st = allele_to_type.get(qseqid)
-        if st: score_by_type[st] += bitscore
+        if st: 
+            score_by_type[st] += total_bitscore
+    
+    if not score_by_type and best_rejected_info:
+        print(f"[DEBUG] No hits passed filter. Best rejected: {best_rejected_info}")
+
 
     ordered = sorted(score_by_type.items(), key=lambda kv: kv[1], reverse=True)
     top, top_score = (ordered[0][0], ordered[0][1]) if ordered else (None, 0.0)

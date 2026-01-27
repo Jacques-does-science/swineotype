@@ -144,29 +144,30 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
         sys.exit(1)
 
     # Optional merge with swineotype summary
+    # Optional merge with swineotype summary or just output to CSV
     if swineotype_summary:
         swineo = Path(swineotype_summary).resolve()
-        if not swineo.exists():
-            err(f"Swineotype summary not found: {swineo}")
-            sys.exit(1)
-
-        log(f"Merging APP results with swineotype summary → {swineo}")
-        # Try TSV then CSV automatically
-        try:
-            suis_df = pd.read_csv(swineo, sep="\t")
-        except Exception:
-            suis_df = pd.read_csv(swineo)
-
+        
         app_df = pd.read_csv(app_results, sep="\t")
-
         app_clean = app_df.rename(
             columns={"Sample": "sample", "Suggested_serovar": "app_serovar"}
         )[["sample", "app_serovar"]]
 
-        merged = suis_df.merge(app_clean, on="sample", how="outer")
-        merged_out = results_dir / "combined_summary.tsv"
-        merged.to_csv(merged_out, sep="\t", index=False)
-        log(f"[SUCCESS] Combined summary written → {merged_out}")
+        if swineo.exists():
+            log(f"Merging APP results with existing summary → {swineo}")
+            # Try TSV then CSV automatically
+            try:
+                suis_df = pd.read_csv(swineo, sep="\t")
+            except Exception:
+                suis_df = pd.read_csv(swineo)
+
+            merged = suis_df.merge(app_clean, on="sample", how="outer")
+            merged.to_csv(swineo, index=False)
+            log(f"[SUCCESS] Updated summary written → {swineo}")
+        else:
+            log(f"Writing APP results to new summary → {swineo}")
+            app_clean.to_csv(swineo, index=False)
+            log(f"[SUCCESS] Summary written → {swineo}")
 
 @click.command()
 @click.option("--assembly", multiple=True, required=True, help="Path to one or more assembly files or glob patterns.")

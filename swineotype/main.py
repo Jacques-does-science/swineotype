@@ -14,12 +14,13 @@ from pathlib import Path
 from swineotype.stages import stage1_score, stage2_resolver_call, interpret_resolver
 from swineotype.config import load_config
 from swineotype.adapters.app import run_app_analysis
-from swineotype.utils import ensure_tool
+from swineotype.utils import ensure_tool, ensure_unix_line_endings
 
 # -------- Main orchestration --------
 
 def process_one(assembly: str, out_dir: Path, threads: int, config: dict):
     run_dir = out_dir / Path(assembly).stem; run_dir.mkdir(parents=True, exist_ok=True)
+    assembly = ensure_unix_line_endings(assembly, config["tmp_dir"])
     s1 = stage1_score(assembly, config["wzxwzy_fasta"], threads, run_dir, config)
     s1_top, s1_second = s1.get("top"), s1.get("second")
     allowed_pair = None

@@ -25,5 +25,6 @@ def run_blast(query_fa: str, db_prefix: str, threads: int, outfmt_cols: str, max
         "-outfmt", outfmt_cols,
         "-max_target_seqs", str(max_target_seqs),
         "-num_threads", str(threads),
+        "-dust", "no",
     ]
     return run(cmd)
