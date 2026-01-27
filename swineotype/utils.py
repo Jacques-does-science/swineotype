@@ -18,32 +18,25 @@ def gzip_file(file_path: str):
 def ensure_unix_line_endings(file_path: str, tmp_dir: str) -> str:
     from pathlib import Path
     path = Path(file_path)
-    # Check if we have CRLF
-    has_crlf = False
-    with open(path, 'rb') as f:
-        while chunk := f.read(4096):
-            if b'\r' in chunk:
-                has_crlf = True
-                break
-    
-    if not has_crlf:
-        return file_path
-    
-    # Needs conversion
     dest = Path(tmp_dir) / path.name
-    
-    # If source and dest are the same, rename dest to avoid overwriting/truncation issues
-    if dest.resolve() == path.resolve():
-         dest = Path(tmp_dir) / f"{path.stem}_unix{path.suffix}"
 
-    # Avoid overwriting if unrelated file exists, but good to refresh
-    click.echo(f"[INFO] Detected Windows line endings in {path.name}. Creating normalized copy at {dest}...")
+    # Even if line endings are fine, we copy to tmp_dir 
+    # to ensure we have write permission for the .fai index file.
+    # This addresses issues where input is in a read-only mount (e.g. WSL).
+    
+    # If source and dest resolve to the same file (e.g. user provided file inside tmp_dir),
+    # we might overwrite it. To be safe, use a prefixed name if they are the same.
+    if dest.resolve() == path.resolve():
+         dest = Path(tmp_dir) / f"staged_{path.name}"
+    
+    # click.echo(f"[INFO] Staging assembly to {dest}...")
     
     with open(path, 'rb') as f_in:
         content = f_in.read()
         
     with open(dest, 'wb') as f_out:
-        content = content.replace(b'\r\n', b'\n')
+        # Normalize CRLF to LF, and also bare CR to LF just in case
+        content = content.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
         f_out.write(content)
         
     return str(dest)
