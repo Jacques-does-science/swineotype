@@ -1,133 +1,135 @@
 # swineotype
 
-A bioinformatics toolkit for serotyping key porcine bacterial pathogens.
+**A bioinformatics toolkit for serotyping key porcine bacterial pathogens.**
 
-`swineotype` is a lightweight, flat‑install toolkit that:
-1.  Natively serotypes **Streptococcus suis** from assemblies.
-2.  Wraps a third‑party Snakemake workflow to serotype **Actinobacillus pleuropneumoniae** (APP) via a dedicated adapter, keeping a unified interface and results format.
+`swineotype` is a user-friendly command-line tool designed to identify the serotypes of two major pig pathogens:
+1.  **Streptococcus suis**: Uses a native, fast, and accurate two-stage algorithms built directly into the tool.
+2.  **Actinobacillus pleuropneumoniae (APP)**: Uses a built-in **adapter** to automate a sophisticated third-party workflow (`serovar_detector`), handling all the complex configuration for you.
 
-## Biology & Application Context
+---
 
-### Pathogens
--   ***Streptococcus suis***: Serotyped by the primary `swineotype` tool.
--   ***Actinobacillus pleuropneumoniae*** (APP): Serotyped via the `app_serovar_detector_adapter`.
+## 🚀 Quick Start
 
-### Why serotyping matters
-For both pathogens, the serotype is critical for vaccine development and epidemiological tracking.
--   *S. suis*: Many closely related serotypes differ by only one or two Single Nucleotide Polymorphisms (SNPs) in the capsule synthesis (cps) genes.
--   *APP*: Detection relies on identifying specific capsule gene clusters.
+### Installation
 
-## Pipeline Architecture & Reasoning
-
-### *S. suis* (Native Pipeline)
-The native pipeline uses a two-stage approach to balance speed and accuracy.
-
--   **Stage 1 (Broad Screen)**: A fast `BLAST` search against a curated `wzx/wzy` gene whitelist assigns a possible serogroup (e.g., the ambiguous groups 1/14 or 2/1/2).
--   **Stage 2 (Fine SNP Resolution)**: For ambiguous cases, a targeted check resolves the serotype. For example, a known SNP at position 483 of the `cpsK` gene distinguishes serotype 1 from 14. This is designed to be resolved by alignment and variant calling tools like `samtools` and `bcftools`.
-
-### APP (Adapter for `serovar_detector`)
-The adapter makes the third-party `serovar_detector` tool plug-and-play within the `swineotype` ecosystem. `serovar_detector` uses `kma` (k-mer alignment) to map reads/assemblies to a capsule gene database.
-
-The adapter's role is to automate the setup process by:
--   Generating the required `samples.tsv` and `config.yaml` files.
--   Running the Snakemake workflow with the correct paths and parameters.
--   Optionally merging the APP results back into a `swineotype` summary file for unified reporting.
-
-## Installation
-
-Follow these steps to set up `swineotype` on your local machine.
-
-**Prerequisites**:
--   You must have a Conda distribution (Miniconda or Anaconda) installed. For installation instructions, please see the [official Conda documentation](https://conda.io/projects/conda/en/latest/user-guide/install/index.html).
--   You will also need `git` to clone the repository.
-
-**Step-by-step instructions**:
+For users with little command-line experience: you will need **git** (to download the code) and **Conda** (to manage software environments).
 
 1.  **Clone the repository**:
-    Open your terminal and run the following command to clone the repository to your local machine:
     ```bash
     git clone --recursive https://github.com/Jacques-does-science/swineotype.git
-    ```
-
-2.  **Navigate to the project directory**:
-    ```bash
     cd swineotype
     ```
+    *Note: `--recursive` is important! It downloads the external APP tools nested inside this project.*
 
-3.  **Run the installation script**:
-
-    This script will create a dedicated Conda environment with all the necessary dependencies and install the `swineotype` package using the `setup.py` file. This makes the `swineotype` command available in your environment.
-
+2.  **Install**:
+    Run the provided helper script. It creates a secluded "environment" so installing this tool doesn't mess up your other programs.
     ```bash
     bash scripts/install_swineotype.sh
     ```
-    *Note: The script will automatically initialize the `serovar_detector` submodule if it wasn't cloned recursively.*
 
-4.  **Activate the Conda environment**:
-    To start using the tools, you must activate the `swineotype` environment:
+3.  **Activate**:
+    You must run this command every time you open a new terminal to use the tool.
     ```bash
     conda activate swineotype
     ```
 
-After these steps, you will be ready to use `swineotype`. The `swineotype` command will be available in your `PATH`.
+### Running the Tool
 
-## Usage
-
-`swineotype` can serotype both *S. suis* and *A. pleuropneumoniae* (APP). You can specify the target species using the `--species` flag.
-
-### *S. suis* Serotyping
+**For *S. suis*:**
 ```bash
 swineotype \
   --species suis \
-  --assembly "/path/to/Ssuis/*.fasta" \
-  --out_dir /path/to/results \
-  --merged_csv /path/to/results/swineotype_summary.csv \
-  --threads 4
+  --assembly "data/*.fasta" \
+  --out_dir results_suis \
+  --merged_csv results_suis/summary.csv
 ```
 
-### APP Serotyping
+**For *APP*:**
 ```bash
 swineotype \
   --species app \
-  --assembly "/path/to/APP/*.fasta" \
-  --out_dir "/path/to/results" \
-  --merged_csv "/path/to/results/app_summary.csv" \
-  --threads 4
+  --assembly "data/*.fasta" \
+  --out_dir results_app \
+  --merged_csv results_app/final_results.csv
 ```
 
-## Configuration
-The tool can be configured via a `config.yaml` file. By default, it will look for a `config.yaml` file in the current directory. You can also specify a path to a custom config file using the `--config` option.
+---
 
-The following options can be configured:
-- `data_dir`: The directory containing the data files.
-- `wzxwzy_fasta`: The name of the `wzx/wzy` whitelist FASTA file.
-- `resolver_refs_fasta`: The name of the resolver references FASTA file.
-- `tmp_dir`: The directory to use for temporary files.
-- `plurality`: The minimum fraction of the total score that the top hit must have to be considered decisive.
-- `delta`: The minimum difference between the top two hits to be considered decisive.
-- `require_agreement`: Whether to require that the top hits for `wzx` and `wzy` agree.
-- `min_pid`: The minimum percent identity for a BLAST hit to be considered.
-- `min_cov`: The minimum coverage for a BLAST hit to be considered.
-- `min_res_pid`: The minimum percent identity for a resolver BLAST hit to be considered.
-- `min_res_alen`: The minimum alignment length for a resolver BLAST hit to be considered.
-- `keep_debug`: Whether to keep the intermediate BLAST results.
-- `gzip_debug`: Whether to gzip the intermediate BLAST results.
-- `clean_temp`: Whether to clean the temporary directory after running.
+## 📖 Command Line Manual
 
-## File & Folder Philosophy
-The project is organized to separate curated data, custom scripts, external code, and run-specific outputs.
+When running `swineotype`, you provide **Inputs** (your data) and **Outputs** (where to save results).
+
+| Argument | Required | Description |
+| :--- | :---: | :--- |
+| `--species` | **Yes** | Choose which pathogen to analyze. Options: `suis` or `app`. |
+| `--assembly` | **Yes** | Path to your assembly FASTA files. You can list multiple files or use wildcards (e.g., `"*.fasta"`). **Note: Use quotes around wildcards to let the tool handle them correctly.** |
+| `--out_dir` | **Yes** | The folder where `swineotype` will create analysis files. If it doesn't exist, it will be created. |
+| `--merged_csv` | No | A convenient summary file collecting results from ALL inputs into one table. Recommended. |
+| `--threads` | No | Number of CPU cores to use. Defaults to using half your available cores. |
+| `--config` | No | Advanced: Path to a custom `config.yaml` to tweak internal thresholds. |
+
+---
+
+## 📂 Understanding the Output
+
+### *S. suis* Output
+When running with `--species suis`, the tool looks for specific marker genes (`wzx`, `wzy`) and sometimes specific mutations (SNPs).
+
+**1. Summary File (`--merged_csv`)**
+This is the most important file. Columns include:
+- `sample`: The name of your input file.
+- `status`:
+    - `STAGE1`: Serotype found quickly by gene match.
+    - `STAGE2`: Serotype resolved by checking specific mutations (SNPs).
+    - `NO_CALL`: Could not determine serotype confidently.
+- `final_serotype`: The predicted serotype (e.g., `2`, `1`, `14`, `1/2`).
+
+**2. Output Directory (`--out_dir`)**
+Inside `out_dir`, you will find a folder for **each sample**. These contain detailed "debug" info:
+- `wzxwzy_vs_asm.tsv`: Raw BLAST results searching for marker genes.
+- `resolver_vs_asm.tsv`: (If Stage 2 ran) Raw BLAST results searching for SNP regions.
+
+---
+
+### *APP* Output (and "app_detector")
+When running with `--species app`, `swineotype` acts as a **smart wrapper**. It prepares files and runs a complex workflow called `serovar_detector` for you.
+
+**1. Why is there a folder called `app_detector` in my results?**
+You will see a structure like `results_app/app_detector`.
+- This is **NOT** the software installation.
+- This is a **run directory**. The external tool (`serovar_detector`) requires a specific folder structure (configuration files, symbolic links, logs) to run. `swineotype` creates this for you inside your output folder so that the analysis is self-contained.
+
+**2. Key Result Files**
+- `results_app/final_results.csv`: (If you used `--merged_csv`) The simple, clean summary of serotypes for your samples.
+- `results_app/app_detector/results/serovar.tsv`: The raw output from the underlying `serovar_detector` tool.
+
+---
+
+## 🔬 How It Works (Under the Hood)
+
+### *S. suis* (Native Pipeline)
+1.  **Broad Screen**: We blast your assembly against known `wzx` and `wzy` genes. If we find a perfect match that belongs to a unique serotype, we stop there.
+2.  **Fine Resolution**: Some serotypes (like 1 vs 14, or 2 vs 1/2) are almost identical. If needed, the tool zooms in on specific DNA letters (SNPs) to tell them apart.
+
+### APP (Wrapper Pipeline)
+APP serotyping is complex and uses 3rd party tools (Snakemake, KMA).
+- **The Problem**: Running the standard `serovar_detector` manually is hard. You have to write config files, create sample sheets, and run long commands.
+- **The Solution**: `swineotype` automates all of this.
+    1.  It creates a temporary "workspace" in your output folder (`app_detector/`).
+    2.  It creates the necessary `sample_sheet.csv` and `config.yaml`.
+    3.  It runs the workflow for you.
+    4.  It reads the result and gives you a clean CSV.
+
+---
+
+## File Structure
+
 ```
 swineotype/
-├─ setup.py                  # Installation script
-├─ swineotype/               # Core Python package
-│  ├─ adapters/              # Glue for third-party workflows
-│  ├─ __init__.py
-│  ├─ blast.py
-│  ├─ config.py
-│  ├─ main.py
-│  └─ stages.py
-├─ data/                     # Curated biological references (stable)
-├─ third_party/              # Vendored external tools (unmodified)
-└─ results/                  # Ephemeral outputs (run-specific)
+├─ scripts/                  # Helper scripts (installers)
+├─ swineotype/               # The main python code
+│  ├─ adapters/              # Code that "wraps" the APP workflow
+│  └─ data/                  # Reference databases for S. suis
+├─ third_party/              # External tools (where the APP logic lives)
+└─ results/                  # Your analysis outputs go here
 ```
-This design ensures clarity and reproducibility. The `results/` directory can be safely deleted and regenerated on each run.
