@@ -112,9 +112,9 @@ You will see a structure like `results_app/app_detector`.
 2.  **Fine Resolution**: Some serotypes (like 1 vs 14, or 2 vs 1/2) are almost identical. If needed, the tool zooms in on specific DNA letters (SNPs) to tell them apart.
 
 ### APP (Wrapper Pipeline)
-APP serotyping is complex and uses 3rd party tools (Snakemake, KMA).
-- **The Problem**: Running the standard `serovar_detector` manually is hard. You have to write config files, create sample sheets, and run long commands.
-- **The Solution**: `swineotype` automates all of this.
+APP serotyping is complex and uses 3rd party tools (Snakemake, KMA, serovar_detector).
+
+
     1.  It creates a temporary "workspace" in your output folder (`app_detector/`).
     2.  It creates the necessary `sample_sheet.csv` and `config.yaml`.
     3.  It runs the workflow for you.
