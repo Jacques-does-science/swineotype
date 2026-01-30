@@ -22,7 +22,7 @@ For users with little command-line experience: you will need **git** (to downloa
     *Note: `--recursive` is important! It downloads the external APP tools nested inside this project.*
 
 2.  **Install**:
-    Run the provided helper script. It creates a secluded "environment" so installing this tool doesn't mess up your other programs.
+    Run the provided helper script. It creates a secluded "environment" so installing this tool doesn't interfere with other programs.
     ```bash
     bash scripts/install_swineotype.sh
     ```
@@ -96,7 +96,6 @@ When running with `--species app`, `swineotype` acts as a **smart wrapper**. It 
 
 **1. Why is there a folder called `app_detector` in my results?**
 You will see a structure like `results_app/app_detector`.
-- This is **NOT** the software installation.
 - This is a **run directory**. The external tool (`serovar_detector`) requires a specific folder structure (configuration files, symbolic links, logs) to run. `swineotype` creates this for you inside your output folder so that the analysis is self-contained.
 
 **2. Key Result Files**
@@ -109,7 +108,7 @@ You will see a structure like `results_app/app_detector`.
 
 ### *S. suis* (Native Pipeline)
 1.  **Broad Screen**: We blast your assembly against known `wzx` and `wzy` genes. If we find a perfect match that belongs to a unique serotype, we stop there.
-2.  **Fine Resolution**: Some serotypes (like 1 vs 14, or 2 vs 1/2) are almost identical. If needed, the tool zooms in on specific DNA letters (SNPs) to tell them apart.
+2.  **Fine Resolution**: Some serotypes (like 1 vs 14, or 2 vs 1/2) are almost identical. If needed, the tool zooms in on specific nucleotides (SNPs) to tell them apart.
 
 ### APP (Wrapper Pipeline)
 APP serotyping is complex and uses 3rd party tools (Snakemake, KMA, serovar_detector).
