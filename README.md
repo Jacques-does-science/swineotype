@@ -33,6 +33,11 @@
 
 Serotyping can be performed by specifying the target species (`suis` or `app`), input assemblies, and output directory.
 
+> **Input must be uncompressed FASTA.** Gzipped assemblies are not supported and currently fail with a raw `makeblastdb` error rather than a clear message. Decompress first:
+> ```bash
+> gunzip -k isolate.fasta.gz
+> ```
+
 ### *S. suis* Serotyping
 ```bash
 swineotype \
@@ -103,7 +108,11 @@ For APP, `swineotype` functions as an automated wrapper for the third-party **se
 | File/Directory | Description |
 | :--- | :--- |
 | `[out_dir]/` | Root directory containing per-sample subdirectories. |
+| `[out_dir]/<sample>/` | Per-sample BLAST debug TSVs (`wzxwzy_vs_asm.tsv`, `resolver_vs_asm.tsv`). Named by the `run_dir` column. |
+| `[out_dir]/.swineotype_cache/` | Working directory: the staged (line-ending-normalised) assembly and its BLAST database, both named by a content hash. Safe to delete; it is rebuilt on the next run. |
 | `--merged_csv` | **Primary Result.** A consolidated CSV table containing results for all input samples. |
+
+> The merged CSV is **appended to** if it already exists, so use a fresh path per run or delete it first to avoid mixing results.
 
 ### Interpretation of Summary Columns
 

@@ -25,10 +25,11 @@ conda create -n "$ENV_NAME" python=3.11 -y
 
 # Install dependencies
 echo "==> Installing dependencies into $ENV_NAME"
+# samtools and bcftools were dropped: Stage 2 used to extract the diagnostic
+# base with `samtools faidx`, but it now reads it out of the BLAST alignment
+# directly. Neither is referenced by swineotype or by serovar_detector.
 conda install -n "$ENV_NAME" -c conda-forge -c bioconda \
     blast \
-    samtools \
-    bcftools \
     pandas \
     pyyaml \
     snakemake \
