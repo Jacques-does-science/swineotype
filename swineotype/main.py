@@ -19,8 +19,8 @@ from swineotype.config import load_config
 from swineotype.adapters.app import run_app_analysis
 from swineotype.utils import ensure_tool, ensure_unix_line_endings
 
-SUMMARY_COLUMNS = ["sample", "sample_path", "run_dir", "stage1_top", "ref_id",
-                   "contig", "contig_pos", "strand", "base", "status",
+SUMMARY_COLUMNS = ["sample", "sample_path", "run_dir", "species", "stage1_top",
+                   "ref_id", "contig", "contig_pos", "strand", "base", "status",
                    "final_serotype", "warnings"]
 
 # -------- Main orchestration --------
@@ -65,6 +65,23 @@ def unique_run_names(paths: list[str]) -> list[str]:
     return names
 
 
+def result_row(source, run_dir, s1, s2_ev, final_sero, final_status, species, warnings):
+    """One summary row.
+
+    `sample` is the bare stem so it matches the key the APP adapter writes;
+    `sample_path` keeps the provenance. It previously held the *staged tmp*
+    path, which meant the suis/APP merge on "sample" could never match.
+    """
+    s2_ev = s2_ev or {}
+    return {"sample": Path(source).stem, "sample_path": str(Path(source).resolve()),
+            "run_dir": run_dir.name, "species": species or "",
+            "stage1_top": (s1 or {}).get("top") or "", "ref_id": s2_ev.get("ref_id", ""),
+            "contig": s2_ev.get("contig", ""), "contig_pos": s2_ev.get("contig_pos", ""),
+            "strand": s2_ev.get("strand", ""), "base": s2_ev.get("base", ""),
+            "status": final_status, "final_serotype": final_sero or "",
+            "warnings": ";".join(warnings)}
+
+
 def process_one(assembly: str, out_dir: Path, threads: int, config: dict, run_name: str | None = None):
     source = assembly
     run_dir = out_dir / (run_name or Path(assembly).stem); run_dir.mkdir(parents=True, exist_ok=True)
@@ -72,6 +89,18 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict, run_na
     warnings: list[str] = []
     s1 = stage1_score(assembly, config["wzxwzy_fasta"], threads, run_dir, config)
     s1_top, s1_second = s1.get("top"), s1.get("second")
+
+    # Species gate. The reference panel still carries the cps loci of six
+    # former S. suis serotypes that have since been moved to other taxa, so a
+    # best hit to one of those identifies a different organism. Reporting it as
+    # an S. suis serotype -- which is what happened before -- is wrong at the
+    # species level, not just the type level.
+    species = s1.get("top_species") if s1_top else None
+    if s1_top and species and species != config["target_species"]:
+        return result_row(source, run_dir, s1, None, None,
+                          "NON_TARGET_SPECIES", species,
+                          [f"cps_type_{s1_top}_belongs_to_{species.replace(' ', '_')}"])
+
     allowed_pair = choose_pair(s1_top, s1_second, config)
 
     # Flag a cross-pair runner-up only when the top hit is not comfortably
@@ -108,16 +137,8 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict, run_na
         warnings.append(f"stage2_outside_stage1_pair:{final_sero}")
         final_sero, final_status = None, "NO_CALL_PAIR_CONFLICT"
 
-    # `sample` is the bare stem so it matches the key the APP adapter writes;
-    # `sample_path` keeps the provenance. It previously held the *staged tmp*
-    # path, which meant the suis/APP merge on "sample" could never match.
-    return {"sample":Path(source).stem,"sample_path":str(Path(source).resolve()),
-            "run_dir":run_dir.name,
-            "stage1_top":s1.get("top") or "","ref_id":(s2_ev or {}).get("ref_id",""),
-            "contig":(s2_ev or {}).get("contig",""),"contig_pos":(s2_ev or {}).get("contig_pos",""),
-            "strand":(s2_ev or {}).get("strand",""),"base":(s2_ev or {}).get("base",""),
-            "status":final_status,"final_serotype":final_sero or "",
-            "warnings":";".join(warnings)}
+    return result_row(source, run_dir, s1, s2_ev, final_sero, final_status,
+                      species or config["target_species"], warnings)
 
 # -------- CLI --------
 
@@ -166,6 +187,9 @@ def main(assembly, out_dir, merged_csv, threads, species, config):
             row = process_one(asm,out_dir,threads, config, run_name); merged_rows.append(row)
             fname, status, final = Path(asm).name,row["status"],row["final_serotype"]
             if status in ("STAGE1","STAGE2"): click.echo(f"[OK] {fname} => {final} ({status})")
+            elif status == "NON_TARGET_SPECIES":
+                click.echo(f"[WARN] {fname} => not {config['target_species']}: {row['species']} "
+                           f"(cps type {row['stage1_top']})", err=True)
             else: click.echo(f"[WARN] {fname} => {status}", err=True)
     if merged_csv:
         mpath = Path(merged_csv); mpath.parent.mkdir(parents=True, exist_ok=True)

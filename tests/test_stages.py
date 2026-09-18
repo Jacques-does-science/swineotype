@@ -14,6 +14,8 @@ from swineotype.stages import (
 REF_1_14 = "cps14K|pair=1_vs_14|pos=492|G_serotype=14|CT_serotype=1"
 REF_2_12 = "cps2K|pair=2_vs_1_2|pos=483|G_serotype=2|CT_serotype=1/2"
 
+SUIS = "Streptococcus suis"
+
 STAGE2_CFG = {"min_res_pid": 90, "min_res_alen": 100, "keep_debug": False, "tmp_dir": "tmp"}
 
 
@@ -33,6 +35,7 @@ def test_stage1_score(mock_parse_whitelist_headers, mock_make_db_if_needed, mock
     mock_parse_whitelist_headers.return_value = (
         {"q1": "1", "q2": "14", "q3": "2"},
         {"q1": "wzx", "q2": "wzy", "q3": "wzx"},
+        {"1": SUIS, "14": SUIS, "2": SUIS},
     )
     mock_make_db_if_needed.return_value = "db_prefix"
     mock_run_blast.return_value = (
@@ -61,7 +64,8 @@ def test_stage1_duplicate_copies_do_not_inflate_score(mock_make_db, mock_run_bla
     Stage 2 was then pointed at the wrong resolver pair.
     """
     with patch("swineotype.stages.parse_whitelist_headers",
-               return_value=({"dup": "1", "single": "2"}, {"dup": "wzx", "single": "wzx"})):
+               return_value=({"dup": "1", "single": "2"}, {"dup": "wzx", "single": "wzx"},
+                             {"1": SUIS, "2": SUIS})):
         mock_make_db.return_value = "db_prefix"
         mock_run_blast.return_value = (
             "dup\tc1\t100\t100\t100\t0\t1000\t1\t100\t1\t100\n"     # copy 1
@@ -83,7 +87,7 @@ def test_stage1_split_gene_still_counts_both_parts(mock_make_db, mock_run_blast,
     """Two HSPs covering DIFFERENT query intervals are a gene split across
     contigs and must both count, or fragmented assemblies get under-scored."""
     with patch("swineotype.stages.parse_whitelist_headers",
-               return_value=({"split": "9"}, {"split": "wzy"})):
+               return_value=({"split": "9"}, {"split": "wzy"}, {"9": SUIS})):
         mock_make_db.return_value = "db_prefix"
         mock_run_blast.return_value = (
             "split\tc1\t100\t50\t100\t0\t400\t1\t50\t1\t50\n"
