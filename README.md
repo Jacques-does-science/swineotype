@@ -71,7 +71,8 @@ The *S. suis* serotyping module uses a two-stage hierarchical algorithm designed
 **Stage 1: *wzx/wzy* Homology Screening**
 The tool performs a **BLASTn** search of the input assembly (database) against a curated reference panel of *wzx* (flippase) and *wzy* (polymerase) genes (query).
 -   **Scoring**: High-Scoring Pairs (HSPs) are filtered by coverage and percent identity. Each surviving allele contributes the sum of its bitscores over a greedy, **non-overlapping** set of HSPs, so a gene split across two contigs counts both parts while a duplicated copy of the same region counts once.
--   **Assignment**: A serotype is assigned if the top-scoring candidate meets the plurality and delta thresholds (score margin > second best).
+-   **Serotype-specific gene required**: only a type whose ***wzy*** was found may be called. *wzx* is conserved across serotypes — one *wzx* routinely matches four different references at 95–98% identity — so it cannot carry a call on its own. *wzy* is the discriminating gene, which is why the published multiplex PCR schemes target it. (The rule is *wzy*-only, not "both genes", because serotype 14 has no *wzx* reference. Configurable via `require_wzy`.)
+-   **Assignment**: A serotype is assigned if the top-scoring *callable* candidate meets the plurality and delta thresholds. Plurality is measured among callable candidates only; counting *wzx*-only cross-hits in the denominator penalised loci whose *wzx* cross-hybridises widely.
 -   **Ambiguity**: Certain serotypes (e.g., **1 vs 14**, **2 vs 1/2**) are clinically distinct but genetically identical at the *wzx/wzy* loci. These trigger Stage 2.
 
 **Stage 0: Species gate**
@@ -123,11 +124,13 @@ The summary CSV contains the following key fields:
 | `sample` | Input assembly filename without its extension. This is the key the APP results are merged on. |
 | `sample_path` | Absolute path of the input assembly, for provenance. |
 | `run_dir` | Name of this sample's subdirectory under `[out_dir]`, holding its BLAST debug TSVs. Suffixed with a short hash when two inputs share a filename. |
-| `species` | Organism the matched *cps* locus belongs to. Normally *Streptococcus suis*; see **Species** below. |
+| `species` | Organism the matched *cps* locus belongs to. Normally *Streptococcus suis*; see **Species** below. Empty when no type was callable. |
 | `final_serotype` | The definitive serotype call (e.g., `2`, `14`, `APP_5`). Empty when no call was made. |
-| `status` | Method used, or why no call was made: <br>• **STAGE1**: Resolved solely by *wzx/wzy* homology. <br>• **STAGE2**: Resolved by SNP analysis. <br>• **NO_CALL_STAGE2**: Insufficient evidence for assignment. <br>• **NO_CALL_PAIR_CONFLICT**: Stage 2 returned a serotype outside the pair Stage 1 pointed at; the call is withheld rather than reported. <br>• **NON_TARGET_SPECIES**: The best *cps* match belongs to another organism; no serotype is reported. See **Species** below. |
+| `status` | Method used, or why no call was made: <br>• **STAGE1**: Resolved solely by *wzx/wzy* homology. <br>• **STAGE2**: Resolved by SNP analysis. <br>• **NO_CALL_STAGE2**: Insufficient evidence for assignment. <br>• **NO_CALL_PAIR_CONFLICT**: Stage 2 returned a serotype outside the pair Stage 1 pointed at; the call is withheld rather than reported. <br>• **NON_TARGET_SPECIES**: The best *cps* match belongs to another organism; no serotype is reported. See **Species** below. <br>• **NO_WZY_MATCH**: *cps* genes are present but no reference *wzy* matched — the signature of a capsular locus outside the 29-serotype scheme. See **Novel capsular loci** below. |
 | `warnings` | Semicolon-separated flags. Empty is the normal case. See below. |
-| `stage1_top` | (Debug) The best-scoring serotype from the *wzx/wzy* screen. |
+| `stage1_top` | (Debug) Best-scoring **callable** type from the *wzx/wzy* screen — i.e. one with *wzy* support. |
+| `stage1_wzx_only` | (Debug) Best type matched by *wzx* alone. A lead, **not** a serotype: *wzx* is not serotype-specific. Populated on `NO_WZY_MATCH`. |
+| `stage2_status` | (Debug) Why Stage 2 did or did not produce a result: `SKIPPED`, `OK`, or `NO_HSP_OR_LOW_QUAL`. |
 | `base` | (Debug) The nucleotide found at the diagnostic site. `-` means the assembly carries a deletion there. |
 | `contig`, `contig_pos`, `strand` | (Debug) Where in the assembly the diagnostic site was read. |
 
@@ -139,6 +142,23 @@ The summary CSV contains the following key fields:
 | `resolver_site_deleted` | The assembly has a deletion at the diagnostic site, so no base could be read. |
 | `resolver_base_not_gct:<base>` | The diagnostic site is not G, C or T (e.g. an `N`), so the call is withheld. |
 | `stage2_outside_stage1_pair:<serotype>` | Internal consistency check failed; the call is withheld. Please report this. |
+| `no_reference_wzy_matched` | No serotype-specific gene was found; no serotype can be assigned. |
+| `nearest_wzx_relative:cps_type_<n>` | The closest *wzx* relative, as a lead for follow-up. Not a serotype call. |
+| `candidate_novel_capsular_locus` | Intact *cps* locus with an unrecognised polymerase — worth characterising. |
+
+---
+
+## Novel capsular loci
+
+At least 32 novel *cps* loci (NCLs) have been described in non-serotypeable *S. suis* since 2015, and they are **not** in this reference panel. An isolate carrying one produces `NO_WZY_MATCH`: its *wzx* matches the panel (that gene is conserved), but its *wzy* does not match any of the 29 serotypes at usable identity.
+
+That is a positive finding, not a failure — it says the locus is outside the current scheme. To follow it up:
+
+1. Note `stage1_wzx_only`; it names the closest *wzx* relative.
+2. Extract the *cps* locus from the assembly. The `wzxwzy_vs_asm.tsv` in the sample's `run_dir` gives the coordinates of the *wzx* and any partial *wzy* hits; the locus is typically 18–30 kb and its conserved *cpsA/cpsB/cpsD* regulatory block marks one end.
+3. BLAST it against NCBI `nt`. Described NCLs were submitted by Zheng, Qiu, Huang and Králová.
+
+Note that the *cps* locus is **not** always flanked by *orfZ–orfX* and *aroA*: seven of the 35 reference loci are flanked by *glf* instead, and five chromosomal arrangements are known ([Okura et al. 2013](https://doi.org/10.1128/AEM.03742-12)). Do not assume a fixed pair of flanking genes when extracting.
 
 ---
 

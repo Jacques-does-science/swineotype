@@ -20,8 +20,9 @@ from swineotype.adapters.app import run_app_analysis
 from swineotype.utils import ensure_tool, ensure_unix_line_endings
 
 SUMMARY_COLUMNS = ["sample", "sample_path", "run_dir", "species", "stage1_top",
-                   "ref_id", "contig", "contig_pos", "strand", "base", "status",
-                   "final_serotype", "warnings"]
+                   "stage1_wzx_only", "stage2_status", "ref_id", "contig",
+                   "contig_pos", "strand", "base", "status", "final_serotype",
+                   "warnings"]
 
 # -------- Main orchestration --------
 
@@ -65,7 +66,8 @@ def unique_run_names(paths: list[str]) -> list[str]:
     return names
 
 
-def result_row(source, run_dir, s1, s2_ev, final_sero, final_status, species, warnings):
+def result_row(source, run_dir, s1, s2_ev, final_sero, final_status, species, warnings,
+               stage2_status="SKIPPED"):
     """One summary row.
 
     `sample` is the bare stem so it matches the key the APP adapter writes;
@@ -75,7 +77,10 @@ def result_row(source, run_dir, s1, s2_ev, final_sero, final_status, species, wa
     s2_ev = s2_ev or {}
     return {"sample": Path(source).stem, "sample_path": str(Path(source).resolve()),
             "run_dir": run_dir.name, "species": species or "",
-            "stage1_top": (s1 or {}).get("top") or "", "ref_id": s2_ev.get("ref_id", ""),
+            "stage2_status": stage2_status,
+            "stage1_top": (s1 or {}).get("top") or "",
+            "stage1_wzx_only": (s1 or {}).get("top_wzx_only") or "",
+            "ref_id": s2_ev.get("ref_id", ""),
             "contig": s2_ev.get("contig", ""), "contig_pos": s2_ev.get("contig_pos", ""),
             "strand": s2_ev.get("strand", ""), "base": s2_ev.get("base", ""),
             "status": final_status, "final_serotype": final_sero or "",
@@ -99,7 +104,20 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict, run_na
     if s1_top and species and species != config["target_species"]:
         return result_row(source, run_dir, s1, None, None,
                           "NON_TARGET_SPECIES", species,
-                          [f"cps_type_{s1_top}_belongs_to_{species.replace(' ', '_')}"])
+                          [f"cps_type_{s1_top}_belongs_to_{species.replace(' ', '_')}"],
+                          stage2_status="SKIPPED")
+
+    # No callable type: the assembly has cps genes, but no reference *wzy*
+    # matched. wzx alone cannot identify a serotype, so the honest answer is
+    # that this locus is not in the panel -- the signature of a novel capsular
+    # locus (NCL). Report the nearest wzx relative as a lead, not as a call.
+    if s1_top is None and s1.get("top_wzx_only"):
+        nearest = s1["top_wzx_only"]
+        return result_row(source, run_dir, s1, None, None, "NO_WZY_MATCH", "",
+                          [f"no_reference_wzy_matched",
+                           f"nearest_wzx_relative:cps_type_{nearest}",
+                           "candidate_novel_capsular_locus"],
+                          stage2_status="SKIPPED")
 
     allowed_pair = choose_pair(s1_top, s1_second, config)
 
@@ -138,7 +156,8 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict, run_na
         final_sero, final_status = None, "NO_CALL_PAIR_CONFLICT"
 
     return result_row(source, run_dir, s1, s2_ev, final_sero, final_status,
-                      species or config["target_species"], warnings)
+                      species or config["target_species"], warnings,
+                      stage2_status=s2_status)
 
 # -------- CLI --------
 
@@ -187,6 +206,9 @@ def main(assembly, out_dir, merged_csv, threads, species, config):
             row = process_one(asm,out_dir,threads, config, run_name); merged_rows.append(row)
             fname, status, final = Path(asm).name,row["status"],row["final_serotype"]
             if status in ("STAGE1","STAGE2"): click.echo(f"[OK] {fname} => {final} ({status})")
+            elif status == "NO_WZY_MATCH":
+                click.echo(f"[WARN] {fname} => no reference wzy matched; candidate novel "
+                           f"capsular locus (nearest wzx: cps type {row['stage1_wzx_only']})", err=True)
             elif status == "NON_TARGET_SPECIES":
                 click.echo(f"[WARN] {fname} => not {config['target_species']}: {row['species']} "
                            f"(cps type {row['stage1_top']})", err=True)

@@ -14,7 +14,9 @@ DEFAULT_CONFIG = {
     "tmp_dir": "",  # empty = derive per-run (see load_config)
     "plurality": 0.60,
     "delta": 100,
-    "require_agreement": 1,
+    # Only call a type whose serotype-specific gene (wzy) was found.
+    # wzx is conserved across serotypes and cannot carry a call on its own.
+    "require_wzy": 1,
     "min_pid": 85.0,
     "min_cov": 0.80,
     "min_res_pid": 90.0,
