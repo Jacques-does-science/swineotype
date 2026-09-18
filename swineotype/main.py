@@ -5,10 +5,13 @@ swineotype.py — Serotyping tool for S. suis (and now A. pleuropneumoniae)
 
 from __future__ import annotations
 
+import csv
+import hashlib
 import os
 import sys
 import glob
 import click
+from collections import Counter
 from pathlib import Path
 
 from swineotype.stages import stage1_score, stage2_resolver_call, interpret_resolver
@@ -16,21 +19,80 @@ from swineotype.config import load_config
 from swineotype.adapters.app import run_app_analysis
 from swineotype.utils import ensure_tool, ensure_unix_line_endings
 
+SUMMARY_COLUMNS = ["sample", "sample_path", "run_dir", "stage1_top", "ref_id",
+                   "contig", "contig_pos", "strand", "base", "status",
+                   "final_serotype", "warnings"]
+
 # -------- Main orchestration --------
 
-def process_one(assembly: str, out_dir: Path, threads: int, config: dict):
-    run_dir = out_dir / Path(assembly).stem; run_dir.mkdir(parents=True, exist_ok=True)
+def pair_of(serotype: str | None, config: dict) -> str | None:
+    """Which resolver pair a serotype belongs to, or None."""
+    if serotype in config["pair_1_14"]: return "1_vs_14"
+    if serotype in config["pair_2_1_2"]: return "2_vs_1_2"
+    return None
+
+
+def choose_pair(s1_top: str | None, s1_second: str | None, config: dict) -> str | None:
+    """Pick the resolver pair implied by Stage 1.
+
+    The top hit is checked against BOTH pairs before the runner-up is
+    considered. The previous form tested pair_1_14 against top *and* second
+    before ever testing pair_2_1_2, so a runner-up from the 1/14 group
+    overrode a top hit from the 2/(1/2) group -- and because the four resolver
+    references are 98-99.5% identical, Stage 2 would then happily return a
+    confident serotype from the wrong pair.
+    """
+    return pair_of(s1_top, config) or pair_of(s1_second, config)
+
+
+def unique_run_names(paths: list[str]) -> list[str]:
+    """Per-sample output directory names, disambiguated only where needed.
+
+    Two inputs sharing a basename would otherwise write their debug TSVs into
+    the same directory and overwrite each other -- the same collision that
+    affected the BLAST cache, and the one that makes a bad call impossible to
+    investigate afterwards.
+    """
+    stems = [Path(p).stem for p in paths]
+    duplicated = {s for s, n in Counter(stems).items() if n > 1}
+    names = []
+    for path, stem in zip(paths, stems):
+        if stem in duplicated:
+            digest = hashlib.sha1(str(Path(path).resolve()).encode()).hexdigest()[:8]
+            names.append(f"{stem}__{digest}")
+        else:
+            names.append(stem)
+    return names
+
+
+def process_one(assembly: str, out_dir: Path, threads: int, config: dict, run_name: str | None = None):
+    source = assembly
+    run_dir = out_dir / (run_name or Path(assembly).stem); run_dir.mkdir(parents=True, exist_ok=True)
     assembly = ensure_unix_line_endings(assembly, config["tmp_dir"])
+    warnings: list[str] = []
     s1 = stage1_score(assembly, config["wzxwzy_fasta"], threads, run_dir, config)
     s1_top, s1_second = s1.get("top"), s1.get("second")
-    allowed_pair = None
-    if (s1_top in config["pair_1_14"]) or (s1_second in config["pair_1_14"]): allowed_pair = "1_vs_14"
-    elif (s1_top in config["pair_2_1_2"]) or (s1_second in config["pair_2_1_2"]): allowed_pair = "2_vs_1_2"
+    allowed_pair = choose_pair(s1_top, s1_second, config)
+
+    # Flag a cross-pair runner-up only when the top hit is not comfortably
+    # ahead. Serotypes 1 and 14 share a locus and always draw serotype 2 into
+    # second place, so warning on the configuration alone fires on every 1/14
+    # isolate; it is the thin margin, not the disagreement, that is the risk.
+    top_pair, second_pair = pair_of(s1_top, config), pair_of(s1_second, config)
+    if top_pair and second_pair and top_pair != second_pair \
+            and s1.get("delta", 0.0) < config["delta"]:
+        warnings.append(f"stage1_pair_ambiguous:{s1_top}/{s1_second}")
+
     must_stage2 = (not s1.get("decisive", False)) or s1.get("must_stage2_for_pair", False)
     s2_ev, s2_status = None, "SKIPPED"
     if must_stage2 and allowed_pair:
         s2_ev = stage2_resolver_call(assembly, config["resolver_refs_fasta"], threads, run_dir, config, allowed_pair)
         s2_status = "OK" if s2_ev else "NO_HSP_OR_LOW_QUAL"
+    if s2_ev and s2_ev.get("base") == "-":
+        warnings.append("resolver_site_deleted")
+    elif s2_ev and s2_ev.get("base") not in ("G", "C", "T"):
+        warnings.append(f"resolver_base_not_gct:{s2_ev.get('base')}")
+
     final_sero, final_status = None, None
     if s2_ev:
         final_sero = interpret_resolver(s2_ev, config); final_status = "STAGE2" if final_sero else "NO_CALL_STAGE2"
@@ -38,10 +100,24 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict):
         final_sero = s1.get("top"); final_status = "STAGE1"
     else:
         final_status = "NO_CALL_STAGE2"
-    return {"sample":assembly,"stage1_top":s1.get("top") or "","ref_id":(s2_ev or {}).get("ref_id",""),
+
+    # A Stage-2 call must stay inside the pair Stage 1 pointed at. This should
+    # be unreachable now that choose_pair() prefers the top hit, but the cost of
+    # a wrong answer here is a serotype 2 <-> 14 confusion, so it is checked.
+    if final_sero and allowed_pair and pair_of(final_sero, config) not in (None, allowed_pair):
+        warnings.append(f"stage2_outside_stage1_pair:{final_sero}")
+        final_sero, final_status = None, "NO_CALL_PAIR_CONFLICT"
+
+    # `sample` is the bare stem so it matches the key the APP adapter writes;
+    # `sample_path` keeps the provenance. It previously held the *staged tmp*
+    # path, which meant the suis/APP merge on "sample" could never match.
+    return {"sample":Path(source).stem,"sample_path":str(Path(source).resolve()),
+            "run_dir":run_dir.name,
+            "stage1_top":s1.get("top") or "","ref_id":(s2_ev or {}).get("ref_id",""),
             "contig":(s2_ev or {}).get("contig",""),"contig_pos":(s2_ev or {}).get("contig_pos",""),
             "strand":(s2_ev or {}).get("strand",""),"base":(s2_ev or {}).get("base",""),
-            "status":final_status,"final_serotype":final_sero or ""}
+            "status":final_status,"final_serotype":final_sero or "",
+            "warnings":";".join(warnings)}
 
 # -------- CLI --------
 
@@ -73,22 +149,32 @@ def main(assembly, out_dir, merged_csv, threads, species, config):
         sys.exit(0)
 
     out_dir = Path(out_dir).resolve(); out_dir.mkdir(parents=True, exist_ok=True)
-    for tool in ("blastn","makeblastdb","samtools"): ensure_tool(tool)
+    # Keep staged assemblies and BLAST databases with the run's own outputs.
+    # They used to land in <install>/data/tmp, which persists across unrelated
+    # runs and breaks outright on a read-only (e.g. shared conda) install.
+    if not config.get("tmp_dir_explicit"):
+        config["tmp_dir"] = out_dir / ".swineotype_cache"
+        config["tmp_dir"].mkdir(parents=True, exist_ok=True)
+    # samtools is no longer used: Stage 2 reads the diagnostic base out of the
+    # BLAST alignment itself.
+    for tool in ("blastn","makeblastdb"): ensure_tool(tool)
     assemblies = expand_globs(list(assembly))
+    run_names = unique_run_names(assemblies)
     merged_rows = []
-    with click.progressbar(assemblies, label="Serotyping assemblies") as bar:
-        for asm in bar:
-            row = process_one(asm,out_dir,threads, config); merged_rows.append(row)
+    with click.progressbar(list(zip(assemblies, run_names)), label="Serotyping assemblies") as bar:
+        for asm, run_name in bar:
+            row = process_one(asm,out_dir,threads, config, run_name); merged_rows.append(row)
             fname, status, final = Path(asm).name,row["status"],row["final_serotype"]
             if status in ("STAGE1","STAGE2"): click.echo(f"[OK] {fname} => {final} ({status})")
             else: click.echo(f"[WARN] {fname} => {status}", err=True)
     if merged_csv:
         mpath = Path(merged_csv); mpath.parent.mkdir(parents=True, exist_ok=True)
-        if not mpath.exists():
-            mpath.write_text("sample,stage1_top,ref_id,contig,contig_pos,strand,base,status,final_serotype\n")
-        with mpath.open("a") as fh:
-            for r in merged_rows:
-                fh.write(",".join(str(r.get(k,"")) for k in ["sample","stage1_top","ref_id","contig","contig_pos","strand","base","status","final_serotype"])+"\n")
+        write_header = not mpath.exists()
+        # csv.writer so a comma or quote in a path cannot corrupt the row.
+        with mpath.open("a", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=SUMMARY_COLUMNS, extrasaction="ignore")
+            if write_header: writer.writeheader()
+            for r in merged_rows: writer.writerow(r)
         click.echo(f"[INFO] Merged CSV written: {mpath}")
 
 if __name__=="__main__": main()

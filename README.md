@@ -70,10 +70,20 @@ The tool performs a **BLASTn** search of the input assembly (database) against a
 -   **Ambiguity**: Certain serotypes (e.g., **1 vs 14**, **2 vs 1/2**) are clinically distinct but genetically identical at the *wzx/wzy* loci. These trigger Stage 2.
 
 **Stage 2: SNP-Based Resolution**
-For unresolved pairs, the tool targets specific serotype-determining Single Nucleotide Polymorphisms (SNPs).
-1.  **Locus Identification**: A targeted BLASTn locates the relevant gene region (e.g., *cpsK*) in the assembly.
-2.  **Genotyping**: The specific base at the diagnostic position (e.g., position 483 in *cpsK*) is extracted.
-3.  **Resolution**: The base is compared against the reference logic (e.g., `G` = Serotype 14, `C/T` = Serotype 1) to make a definitive call.
+For unresolved pairs, the tool targets the serotype-determining SNP in *cpsK*, which encodes the glycosyltransferase CpsK. A single residue (161) sets whether the enzyme adds galactose or *N*-acetylgalactosamine to the CPS side chain, and that is the only difference between each pair.
+
+1.  **Locus Identification**: A targeted BLASTn locates *cpsK* in the assembly.
+2.  **Genotyping**: The base aligned to the diagnostic position is read **out of the BLAST alignment itself**, walking the gapped alignment column by column. Offset arithmetic on the HSP start would assume an ungapped alignment, and a single upstream indel — the characteristic Oxford Nanopore error — is enough to shift the read-out and flip the call.
+3.  **Resolution**: The base is interpreted using the `G_serotype` / `CT_serotype` fields declared in each reference's own FASTA header.
+
+| Locus group | Base | Codon 161 | Residue | Side-chain sugar | Serotype |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 2 / 1&#8239;2 | `G` (pos 483) | `TGG` | Trp | Gal | **2** |
+| 2 / 1&#8239;2 | `C`/`T` (pos 483) | `TGY` | Cys | GalNAc | **1/2** |
+| 1 / 14 | `G` (pos 492) | `TGG` | Trp | Gal | **14** |
+| 1 / 14 | `C`/`T` (pos 492) | `TGY` | Cys | GalNAc | **1** |
+
+The two groups declare different positions for the same residue because the 1/14 references carry 9 extra bases at their 5′ end. The position is therefore declared **per reference** in its header, never hard-coded. See `tests/test_golden_resolver.py`, which asserts this against the shipped data.
 
 ### *Actinobacillus pleuropneumoniae* (Adapter Pipeline)
 
@@ -98,11 +108,26 @@ The summary CSV contains the following key fields:
 
 | Column | Explanation |
 | :--- | :--- |
-| `sample` | Filename/ID of the input assembly. |
-| `final_serotype` | The definitive serotype call (e.g., `2`, `14`, `APP_5`). |
-| `status` | Confidence level or method used: <br>• **STAGE1**: Resolved solely by *wzx/wzy* homology. <br>• **STAGE2**: Resolved by SNP analysis (high confidence). <br>• **NO_CALL**: Insufficient evidence for assignment. |
-| `stage1_top` | (Debug) The best hit from the initial detailed gene screen. |
-| `base` | (Debug) For Stage 2, the specific nucleotide base found at the varying site. |
+| `sample` | Input assembly filename without its extension. This is the key the APP results are merged on. |
+| `sample_path` | Absolute path of the input assembly, for provenance. |
+| `run_dir` | Name of this sample's subdirectory under `[out_dir]`, holding its BLAST debug TSVs. Suffixed with a short hash when two inputs share a filename. |
+| `final_serotype` | The definitive serotype call (e.g., `2`, `14`, `APP_5`). Empty when no call was made. |
+| `status` | Method used, or why no call was made: <br>• **STAGE1**: Resolved solely by *wzx/wzy* homology. <br>• **STAGE2**: Resolved by SNP analysis. <br>• **NO_CALL_STAGE2**: Insufficient evidence for assignment. <br>• **NO_CALL_PAIR_CONFLICT**: Stage 2 returned a serotype outside the pair Stage 1 pointed at; the call is withheld rather than reported. |
+| `warnings` | Semicolon-separated flags. Empty is the normal case. See below. |
+| `stage1_top` | (Debug) The best-scoring serotype from the *wzx/wzy* screen. |
+| `base` | (Debug) The nucleotide found at the diagnostic site. `-` means the assembly carries a deletion there. |
+| `contig`, `contig_pos`, `strand` | (Debug) Where in the assembly the diagnostic site was read. |
+
+### Warnings
+
+| Flag | Meaning |
+| :--- | :--- |
+| `stage1_pair_ambiguous:<top>/<second>` | The top two *wzx/wzy* hits point at different locus groups. The top hit is used; the call is worth confirming. |
+| `resolver_site_deleted` | The assembly has a deletion at the diagnostic site, so no base could be read. |
+| `resolver_base_not_gct:<base>` | The diagnostic site is not G, C or T (e.g. an `N`), so the call is withheld. |
+| `stage2_outside_stage1_pair:<serotype>` | Internal consistency check failed; the call is withheld. Please report this. |
+
+> **Note on species.** The tool assigns a *cps* type; it does not confirm the species. The reference panel still contains the loci of former serotypes 20, 22, 26 (now *Streptococcus parasuis*), 33 (*S. ruminantium*) and 32, 34 (*S. orisratti*), so a hit to one of those indicates a different organism, not an *S. suis* serotype. Confirm the species independently.
 
 ### Specific Note on APP Results Structure
 When running `--species app`, you will observe a subdirectory named `app_detector/`.

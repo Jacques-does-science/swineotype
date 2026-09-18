@@ -3,9 +3,14 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
-from swineotype.blast import run_blast, make_db_if_needed, run
+from swineotype.blast import run_blast, make_db_if_needed
 
 from swineotype.utils import ensure_tool, gzip_file
+
+# Stage-2 needs the aligned sequences so the diagnostic base can be read out of
+# the alignment itself rather than by arithmetic on start coordinates.
+RESOLVER_OUTFMT = ("6 qseqid sseqid pident length qlen evalue bitscore "
+                   "qstart qend sstart send qseq sseq")
 
 
 def reverse_complement(base: str) -> str:
@@ -60,7 +65,7 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
         })
 
     score_by_type = defaultdict(float)
-    
+
     best_rejected_info = None
 
     for qseqid, hsp_list in hits.items():
@@ -76,7 +81,7 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
                     merged.append((curr_start, curr_end))
                     curr_start, curr_end = next_start, next_end
             merged.append((curr_start, curr_end))
-        
+
         covered_len = sum(e - s + 1 for s, e in merged)
         qlen = hsp_list[0]["qlen"]
         coverage = (covered_len / qlen) if qlen else 0.0
@@ -94,13 +99,29 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
                  best_rejected_info = info
             continue
 
-        # 4. Sum bitscore
-        total_bitscore = sum(h["bitscore"] for h in hsp_list)
-        
+        # 4. Score this allele: sum bitscores over a greedy, non-overlapping
+        # set of HSPs (best-scoring first).
+        #
+        # Summing over ALL HSPs let a duplicated or repeated copy of a gene in
+        # the assembly count twice, inflating that serotype's score enough to
+        # push it to the top of the ranking. Taking only the single best HSP
+        # would fix that but would under-score a gene legitimately split across
+        # two contigs. Requiring the counted HSPs not to overlap in QUERY space
+        # handles both: split genes contribute each of their parts, duplicate
+        # copies of the same region do not.
+        allele_bitscore = 0.0
+        counted: list[tuple[int, int]] = []
+        for h in sorted(hsp_list, key=lambda x: -x["bitscore"]):
+            s, e = min(h["qstart"], h["qend"]), max(h["qstart"], h["qend"])
+            if any(s <= c_e and e >= c_s for c_s, c_e in counted):
+                continue
+            counted.append((s, e))
+            allele_bitscore += h["bitscore"]
+
         st = allele_to_type.get(qseqid)
-        if st: 
-            score_by_type[st] += total_bitscore
-    
+        if st:
+            score_by_type[st] += allele_bitscore
+
     if not score_by_type and best_rejected_info:
         print(f"[DEBUG] No hits passed filter. Best rejected: {best_rejected_info}")
 
@@ -116,11 +137,43 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
             "delta":delta,"decisive":decisive,"must_stage2_for_pair":must_stage2_for_pair}
 
 
+def base_at_query_pos(qseq: str, sseq: str, qstart: int, sstart: int, send: int, pos: int):
+    """Read the subject base aligned to query position ``pos``.
+
+    Walks the gapped alignment column by column instead of computing
+    ``sstart + (pos - qstart)``. That arithmetic silently assumed an ungapped
+    HSP, so a single indel anywhere between the HSP start and the diagnostic
+    site shifted the read-out by one base -- the characteristic ONT error mode,
+    and enough to flip a serotype call.
+
+    BLAST reports qseq/sseq in alignment orientation, so for a minus-strand
+    subject hit sseq is already reverse-complemented onto the query strand and
+    needs no further complementing.
+
+    Returns ``(base, contig_pos, strand)``. ``base`` is ``"-"`` when the
+    subject carries a deletion at the diagnostic site, or ``None`` if the
+    alignment does not actually reach ``pos``.
+    """
+    strand = "+" if sstart <= send else "-"
+    sstep = 1 if strand == "+" else -1
+
+    qpos, spos = qstart, sstart
+    for qchar, schar in zip(qseq, sseq):
+        q_gap = (qchar == "-")
+        s_gap = (schar == "-")
+        if not q_gap and qpos == pos:
+            return ("-" if s_gap else schar.upper()), (None if s_gap else spos), strand
+        if not q_gap:
+            qpos += 1
+        if not s_gap:
+            spos += sstep
+    return None, None, strand
+
+
 def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, run_dir: Path, config: dict, allowed_pair: str|None=None):
-    ensure_tool("blastn"); ensure_tool("makeblastdb"); ensure_tool("samtools")
+    ensure_tool("blastn"); ensure_tool("makeblastdb")
     db_prefix = make_db_if_needed(assembly_fa, config["tmp_dir"])
-    outfmt = "6 qseqid sseqid pident length qlen evalue bitscore qstart qend sstart send"
-    tsv_text = run_blast(resolver_refs_fa, db_prefix, threads, outfmt)
+    tsv_text = run_blast(resolver_refs_fa, db_prefix, threads, RESOLVER_OUTFMT)
 
     if config["keep_debug"]:
         stage2_tsv = run_dir / "resolver_vs_asm.tsv"
@@ -131,7 +184,10 @@ def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, 
 
     best = None
     for line in filter(None, tsv_text.splitlines()):
-        qseqid, sseqid, pident, length, qlen, evalue, bitscore, qstart, qend, sstart, send = line.split("\t")
+        parts = line.split("\t")
+        if len(parts) < 13: continue
+        (qseqid, sseqid, pident, length, qlen, evalue, bitscore,
+         qstart, qend, sstart, send, qseq, sseq) = parts[:13]
         pident, length, qstart, qend, sstart, send, bitscore = float(pident), int(length), int(qstart), int(qend), int(sstart), int(send), float(bitscore)
         meta = parse_resolver_meta(qseqid)
         if allowed_pair and meta["pair"] != allowed_pair: continue
@@ -139,24 +195,13 @@ def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, 
         spans = (qstart <= pos <= qend) or (qend <= pos <= qstart)
         if not spans: continue
         if pident < config["min_res_pid"] or length < config["min_res_alen"]: continue
-        qoff = pos - qstart
-        if sstart <= send:
-            strand = "+"; tpos = sstart + qoff
-        else:
-            strand = "-"; tpos = sstart - qoff
+        base, tpos, strand = base_at_query_pos(qseq, sseq, qstart, sstart, send, pos)
+        if base is None: continue
         ev = {"ref_id":qseqid,"contig":sseqid,"contig_pos":tpos,"strand":strand,
-              "pident":pident,"length":length,"bitscore":bitscore,"pair":meta["pair"],"base":None}
+              "pident":pident,"length":length,"bitscore":bitscore,"pair":meta["pair"],"base":base}
         if best is None or bitscore > best[0]: best = (bitscore, ev)
     if not best: return None
-    ev = best[1]
-    region = f"{ev['contig']}:{ev['contig_pos']}-{ev['contig_pos']}"
-    fa = run(["samtools","faidx",assembly_fa,region])
-    lines = [ln.strip() for ln in fa.splitlines()]
-    base = lines[1].strip().upper() if len(lines)>1 else "N"
-    if ev["strand"] == "-":
-        base = reverse_complement(base)
-    ev["base"] = base
-    return ev
+    return best[1]
 
 
 def interpret_resolver(ev: dict|None, config: dict) -> str|None:
@@ -172,8 +217,12 @@ def interpret_resolver(ev: dict|None, config: dict) -> str|None:
 def parse_resolver_meta(qid: str):
     """
     Parse resolver FASTA IDs of the form:
-      >id|pair=1_vs_14|pos=481|G_serotype=14|CT_serotype=1
+      >id|pair=1_vs_14|pos=492|G_serotype=14|CT_serotype=1
     Returns dict with keys: pair, pos, G_serotype, CT_serotype
+
+    `pos` is 1-based and relative to THAT reference, which is why the 1/14 and
+    2/(1/2) references declare different positions (492 vs 483) for the same
+    CpsK residue -- the 1/14 references carry 9 extra bases at the 5' end.
     """
     meta = {"pair": None, "pos": None, "G_serotype": None, "CT_serotype": None}
     for tok in qid.split("|")[1:]:
