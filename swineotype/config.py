@@ -22,6 +22,9 @@ DEFAULT_CONFIG = {
     "keep_debug": 1,
     "gzip_debug": 0,
     "clean_temp": 0,
+    # Species this tool assigns serotypes for. A cps reference tagged with any
+    # other species identifies a different organism, not an S. suis serotype.
+    "target_species": "Streptococcus suis",
     "ambig_set": {"1", "14", "2", "1/2"},
     "pair_1_14": {"1", "14"},
     "pair_2_1_2": {"2", "1/2"},

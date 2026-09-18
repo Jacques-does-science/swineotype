@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -18,27 +19,45 @@ def reverse_complement(base: str) -> str:
     comp = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
     return comp.get(base.upper(), 'N')
 
+def header_tag(header: str, key: str) -> str | None:
+    """Value of a `[key=value]` tag in a FASTA header, or None.
+
+    Values may contain spaces (species binomials, literature references), so
+    this cannot be a whitespace split.
+    """
+    match = re.search(r"\[" + re.escape(key) + r"=([^\]]*)\]", header)
+    return match.group(1) if match else None
+
+
 def parse_whitelist_headers(fasta_path: str):
+    """Returns (allele -> cps type, allele -> wzx/wzy, cps type -> species).
+
+    The species comes from each reference's own `[species=...]` tag rather than
+    being assumed. Former S. suis serotypes 20, 22 and 26 are Streptococcus
+    parasuis, 33 is S. ruminantium, and 32 and 34 are S. orisratti; their cps
+    loci are still in the panel, so a hit to one identifies a different
+    organism, not an S. suis serotype.
+    """
     allele_to_type = {}
     allele_to_geneclass = {}
+    type_to_species = {}
     with open(fasta_path, "r") as fh:
         for line in fh:
             if not line.startswith(">"): continue
             h = line[1:].strip()
             allele_id = h.split()[0]
-            st = None
-            for tok in h.split():
-                if tok.startswith("[type_id=") and tok.endswith("]"):
-                    st = tok[len("[type_id="):-1]; break
+            st = header_tag(h, "type_id")
             allele_to_type[allele_id] = st
+            if st is not None:
+                type_to_species[st] = header_tag(h, "species")
             low = allele_id.lower()
             geneclass = "wzy" if "wzy" in low else ("wzx" if "wzx" in low else None)
             allele_to_geneclass[allele_id] = geneclass
-    return allele_to_type, allele_to_geneclass
+    return allele_to_type, allele_to_geneclass, type_to_species
 
 def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Path, config: dict):
     ensure_tool("blastn"); ensure_tool("makeblastdb")
-    allele_to_type, allele_to_geneclass = parse_whitelist_headers(whitelist_fa)
+    allele_to_type, allele_to_geneclass, type_to_species = parse_whitelist_headers(whitelist_fa)
     db_prefix = make_db_if_needed(assembly_fa, config["tmp_dir"])
     outfmt = "6 qseqid sseqid pident length qlen evalue bitscore qstart qend sstart send"
     tsv_text = run_blast(whitelist_fa, db_prefix, threads, outfmt)
@@ -134,7 +153,9 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
     decisive = (fraction >= config["plurality"]) and (delta >= config["delta"])
     must_stage2_for_pair = bool(top in config["ambig_set"])
     return {"scores":score_by_type,"top":top,"second":second,"fraction":fraction,
-            "delta":delta,"decisive":decisive,"must_stage2_for_pair":must_stage2_for_pair}
+            "delta":delta,"decisive":decisive,"must_stage2_for_pair":must_stage2_for_pair,
+            "type_to_species":type_to_species,
+            "top_species":type_to_species.get(top) if top else None}
 
 
 def base_at_query_pos(qseq: str, sseq: str, qstart: int, sstart: int, send: int, pos: int):
