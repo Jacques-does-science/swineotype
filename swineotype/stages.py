@@ -84,6 +84,7 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
         })
 
     score_by_type = defaultdict(float)
+    genes_by_type = defaultdict(set)
 
     best_rejected_info = None
 
@@ -140,22 +141,49 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
         st = allele_to_type.get(qseqid)
         if st:
             score_by_type[st] += allele_bitscore
+            geneclass = allele_to_geneclass.get(qseqid)
+            if geneclass:
+                genes_by_type[st].add(geneclass)
 
     if not score_by_type and best_rejected_info:
         print(f"[DEBUG] No hits passed filter. Best rejected: {best_rejected_info}")
 
+    ranked_all = sorted(score_by_type.items(), key=lambda kv: kv[1], reverse=True)
 
-    ordered = sorted(score_by_type.items(), key=lambda kv: kv[1], reverse=True)
-    top, top_score = (ordered[0][0], ordered[0][1]) if ordered else (None, 0.0)
-    second, second_score = (ordered[1][0], ordered[1][1]) if len(ordered) > 1 else (None, 0.0)
-    total = sum(score_by_type.values())
+    # Only a type whose *wzy* survived the filters may be called.
+    #
+    # wzx (flippase) is conserved across serotypes -- a single wzx routinely
+    # matches four different references at 95-98% -- whereas wzy (polymerase)
+    # is the serotype-specific gene, which is why the published multiplex PCR
+    # schemes target it. Scoring wzx and wzy equally let a conserved wzx alone
+    # crown a serotype: an isolate carrying a novel capsular locus reported a
+    # confident `stage1_top` for whichever serotype's wzx happened to be
+    # closest, while its own wzy matched nothing in the panel.
+    #
+    # Requiring wzx as well would be wrong: serotype 14 has no wzx reference.
+    eligible = [(t, s) for t, s in ranked_all if "wzy" in genes_by_type[t]] \
+        if config.get("require_wzy") else ranked_all
+
+    top, top_score = eligible[0] if eligible else (None, 0.0)
+    second, second_score = eligible[1] if len(eligible) > 1 else (None, 0.0)
+    # Plurality is measured among the callable candidates. Including
+    # wzx-only types in the denominator penalised a locus whose wzx
+    # cross-hybridises widely, even when its own margin was decisive.
+    total = sum(s for _, s in eligible)
     fraction, delta = (top_score/total if total else 0.0), top_score-second_score
     decisive = (fraction >= config["plurality"]) and (delta >= config["delta"])
     must_stage2_for_pair = bool(top in config["ambig_set"])
+
+    # Best hit that is NOT callable for want of a wzy: the diagnostic for a
+    # candidate novel locus.
+    wzx_only = [(t, s) for t, s in ranked_all if "wzy" not in genes_by_type[t]]
+
     return {"scores":score_by_type,"top":top,"second":second,"fraction":fraction,
             "delta":delta,"decisive":decisive,"must_stage2_for_pair":must_stage2_for_pair,
             "type_to_species":type_to_species,
-            "top_species":type_to_species.get(top) if top else None}
+            "top_species":type_to_species.get(top) if top else None,
+            "genes_by_type":{t: sorted(g) for t, g in genes_by_type.items()},
+            "top_wzx_only":wzx_only[0][0] if wzx_only else None}
 
 
 def base_at_query_pos(qseq: str, sseq: str, qstart: int, sstart: int, send: int, pos: int):
