@@ -1,4 +1,8 @@
+import hashlib
+import os
 import sys
+from pathlib import Path
+
 import click
 import gzip
 
@@ -12,31 +16,33 @@ def gzip_file(file_path: str):
     with open(file_path, 'rb') as f_in:
         with gzip.open(f"{file_path}.gz", 'wb') as f_out:
             f_out.writelines(f_in)
-    import os
     os.remove(file_path)
 
 def ensure_unix_line_endings(file_path: str, tmp_dir: str) -> str:
-    from pathlib import Path
-    path = Path(file_path)
-    dest = Path(tmp_dir) / path.name
+    """Stage an assembly into tmp_dir with LF line endings.
 
-    # Even if line endings are fine, we copy to tmp_dir 
-    # to ensure we have write permission for the .fai index file.
-    # This addresses issues where input is in a read-only mount (e.g. WSL).
-    
-    # If source and dest resolve to the same file (e.g. user provided file inside tmp_dir),
-    # we might overwrite it. To be safe, use a prefixed name if they are the same.
-    if dest.resolve() == path.resolve():
-         dest = Path(tmp_dir) / f"staged_{path.name}"
-    
-    # click.echo(f"[INFO] Staging assembly to {dest}...")
-    
-    with open(path, 'rb') as f_in:
-        content = f_in.read()
-        
-    with open(dest, 'wb') as f_out:
-        # Normalize CRLF to LF, and also bare CR to LF just in case
-        content = content.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
-        f_out.write(content)
-        
+    We always stage a copy rather than reading in place, so that a read-only
+    input mount (e.g. WSL) can still be processed.
+
+    The staged name carries a short content digest. Staging on the bare
+    basename meant two different assemblies called ``assembly.fasta`` clobbered
+    each other in the shared tmp dir -- and, because the BLAST database and the
+    samtools .fai index were also keyed on that name, one sample's coordinates
+    could be applied to another sample's sequence.
+    """
+    path = Path(file_path)
+    tmp_dir = Path(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    content = path.read_bytes()
+    # Normalize CRLF to LF, and also bare CR to LF just in case
+    content = content.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+
+    digest = hashlib.sha1(content).hexdigest()[:12]
+    dest = tmp_dir / f"{path.stem}__{digest}{path.suffix}"
+
+    # Same content already staged under this name: reuse it.
+    if not (dest.exists() and dest.stat().st_size == len(content)):
+        dest.write_bytes(content)
+
     return str(dest)

@@ -167,3 +167,7 @@ results/
 !/data/suis_resolver_refs.fasta
 !/data/suis_wzxwzy_whitelist.fasta
 data/tmp
+
+# swineotype per-run cache (staged assemblies + BLAST databases)
+.swineotype_cache/
+*.fai

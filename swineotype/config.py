@@ -1,7 +1,9 @@
 import os
-from pathlib import Path
-import yaml
 import site
+import tempfile
+from pathlib import Path
+
+import yaml
 
 # --- Default Configuration ---
 
@@ -9,7 +11,7 @@ DEFAULT_CONFIG = {
     "data_dir": "data",
     "wzxwzy_fasta": "suis_wzxwzy_whitelist.fasta",
     "resolver_refs_fasta": "suis_resolver_refs.fasta",
-    "tmp_dir": "results/db_cache",
+    "tmp_dir": "",  # empty = derive per-run (see load_config)
     "plurality": 0.60,
     "delta": 100,
     "require_agreement": 1,
@@ -75,17 +77,40 @@ def load_config(config_file: str | None = None) -> dict:
 
     # --- Environment Variable Overrides ---
 
-    for key, value in config.items():
+    # Coerce against the DEFAULT's type. `type(value)(raw)` was wrong for the
+    # set-valued keys -- set("1,14") yields {'1', ',', '4'} -- and cannot
+    # express a "not set" sentinel at all.
+    for key, default in DEFAULT_CONFIG.items():
         env_var = f"SWINEO_{key.upper()}"
-        if env_var in os.environ:
-            config[key] = type(value)(os.environ[env_var])
+        if env_var not in os.environ:
+            continue
+        raw = os.environ[env_var]
+        if isinstance(default, bool):
+            config[key] = raw.strip().lower() in ("1", "true", "yes", "on")
+        elif isinstance(default, (set, frozenset)):
+            config[key] = {t.strip() for t in raw.split(",") if t.strip()}
+        elif isinstance(default, int):
+            config[key] = int(raw)
+        elif isinstance(default, float):
+            config[key] = float(raw)
+        else:
+            config[key] = raw
 
     # --- Path Resolution ---
 
     config["data_dir"] = root_dir / "data"
     config["wzxwzy_fasta"] = config["data_dir"] / config["wzxwzy_fasta"]
     config["resolver_refs_fasta"] = config["data_dir"] / config["resolver_refs_fasta"]
-    config["tmp_dir"] = config["data_dir"] / "tmp"
+
+    # tmp_dir: an explicit setting (config file or SWINEO_TMP_DIR) wins and is
+    # flagged so the CLI does not override it. Otherwise fall back to the
+    # system temp dir -- NOT the install tree, which may be read-only and is
+    # shared between unrelated runs. The CLI normally replaces this with
+    # <out_dir>/.swineotype_cache.
+    explicit = bool(config.get("tmp_dir"))
+    config["tmp_dir_explicit"] = explicit
+    config["tmp_dir"] = Path(config["tmp_dir"]) if explicit \
+        else Path(tempfile.gettempdir()) / "swineotype_cache"
     config["tmp_dir"].mkdir(parents=True, exist_ok=True)
 
     return config
