@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "name": "suis_resolver_refs",
+  "data_version": "2026-09-21.1",
+  "target_fasta": "data/suis_resolver_refs.fasta",
+  "description": "Stage-2 cpsK/cps1L resolver references. Each entry is a verbatim slice of a public record; the diagnostic position is the third (wobble) base of codon 161, which distinguishes Trp161 (TGG) from Cys161 (TGT/TGC).",
+  "checksum": {
+    "algorithm": "sha256",
+    "normalization": "uppercase concatenated nucleotide sequence, ASCII-encoded, no header, no whitespace, no trailing newline"
+  },
+  "extraction_method": {
+    "source_api": "https://www.ebi.ac.uk/ena/browser/api/embl/{accession}?download=false",
+    "steps": [
+      "Download the EMBL flatfile for accession.version from ENA.",
+      "Concatenate the sequence lines following the SQ line and uppercase them.",
+      "Slice source_start..source_end, one-based and inclusive.",
+      "Reverse-complement the slice if strand is '-'. All four entries here are forward strand.",
+      "Verify length, sha256, diagnostic_codon and coding-sequence integrity before writing."
+    ],
+    "command": "python scripts/resolver_refs.py regenerate",
+    "offline_check": "python scripts/resolver_refs.py check"
+  },
+  "interpretation": {
+    "1_vs_14": {
+      "TGG": "14",
+      "TGC": "1",
+      "TGT": "1"
+    },
+    "2_vs_1_2": {
+      "TGG": "2",
+      "TGC": "1/2",
+      "TGT": "1/2"
+    }
+  },
+  "notes": [
+    "The 1_vs_14 references declare diagnostic position 492 and the 2_vs_1_2 references 483. The 9 bp offset is real: the 1/14 references carry 9 extra bases at the 5' end. The positions are intentional and verified; they must not be unified.",
+    "cps2K and cps14K shipped with a two-base (TG) deletion relative to their source records, which frameshifted the 3' two thirds of each gene. `python scripts/resolver_refs.py repair` restores them offline and refuses to act on a sequence that does not hash to the recorded damaged state.",
+    "codon_index_in_reference is the codon number within THIS slice; canonical_residue is the CpsK residue it corresponds to. They differ for the 1_vs_14 references because of the 9 bp 5' extension."
+  ],
+  "references": [
+    {
+      "id": "cps1L",
+      "fasta_header": "cps1L|pair=1_vs_14|pos=492|G_serotype=14|CT_serotype=1",
+      "accession": "AB737817.1",
+      "source_start": 13538,
+      "source_end": 14551,
+      "strand": "+",
+      "length": 1014,
+      "diagnostic_position": 492,
+      "diagnostic_codon": "TGT",
+      "codon_index_in_reference": 164,
+      "canonical_residue": 161,
+      "pair": "1_vs_14",
+      "sha256": "b9885c018fa4f38eb9c20feb23b3555d01811ef4e08e018191deed8f9999cf5b",
+      "damaged_sha256": null
+    },
+    {
+      "id": "cps1/2K",
+      "fasta_header": "cps1/2K|pair=2_vs_1_2|pos=483|G_serotype=2|CT_serotype=1/2",
+      "accession": "AB737816.1",
+      "source_start": 15240,
+      "source_end": 16244,
+      "strand": "+",
+      "length": 1005,
+      "diagnostic_position": 483,
+      "diagnostic_codon": "TGT",
+      "codon_index_in_reference": 161,
+      "canonical_residue": 161,
+      "pair": "2_vs_1_2",
+      "sha256": "8acac258e2e203dcd4dfb99520cb1b40257265ca1fc17541b7b007d8e31d4b7a",
+      "damaged_sha256": null
+    },
+    {
+      "id": "cps2K",
+      "fasta_header": "cps2K|pair=2_vs_1_2|pos=483|G_serotype=2|CT_serotype=1/2",
+      "accession": "BR001000.1",
+      "source_start": 15237,
+      "source_end": 16241,
+      "strand": "+",
+      "length": 1005,
+      "diagnostic_position": 483,
+      "diagnostic_codon": "TGG",
+      "codon_index_in_reference": 161,
+      "canonical_residue": 161,
+      "pair": "2_vs_1_2",
+      "sha256": "0b6608caaa67a30a6b23cb224140e65271be1516fb08b51fcd896e362f7b5b71",
+      "damaged_sha256": "e30a60ca4802106d5f659d1695111d7e6b6e3e44ac71ae907630472202922a2f"
+    },
+    {
+      "id": "cps14K",
+      "fasta_header": "cps14K|pair=1_vs_14|pos=492|G_serotype=14|CT_serotype=1",
+      "accession": "AB737822.1",
+      "source_start": 13505,
+      "source_end": 14518,
+      "strand": "+",
+      "length": 1014,
+      "diagnostic_position": 492,
+      "diagnostic_codon": "TGG",
+      "codon_index_in_reference": 164,
+      "canonical_residue": 161,
+      "pair": "1_vs_14",
+      "sha256": "a5732f43f7f71254a7017b8b6f5e6181ba5c8a840aa0b0dec08b165bbedb1756",
+      "damaged_sha256": "47dd5779a5853561901a4e5cd2a01921a968dcc9267c065e45968064e2374b86"
+    }
+  ]
+}
