@@ -35,21 +35,26 @@ def test_pair_of(serotype, expected):
     # Mirror case, which the old code happened to get right.
     ("14", "2", "1_vs_14"),
     ("1", "1/2", "1_vs_14"),
-    # Fall back to the runner-up only when the top hit is in neither pair.
-    ("9", "2", "2_vs_1_2"),
-    ("9", "14", "1_vs_14"),
+    # Regression, and the expectation this file used to encode backwards:
+    # a top hit outside both resolvable families selects NO pair. It used to
+    # fall back to the runner-up, so top="9" second="2" chose 2_vs_1_2, Stage
+    # 2 read the cpsK site and overwrote the unresolved 9 with a confident
+    # "2". The cpsK site distinguishes 2 from 1/2; it is silent on whether the
+    # isolate is a 9, so reading it here invents confidence.
+    ("9", "2", None),
+    ("9", "14", None),
     ("9", "7", None),
+    (None, "2", None),
     (None, None, None),
 ])
-def test_choose_pair_prefers_the_top_hit(top, second, expected):
+def test_choose_pair_uses_only_the_top_hit(top, second, expected):
     assert choose_pair(top, second, CONFIG) == expected
 
 
 def test_choose_pair_never_returns_the_runner_ups_pair_over_the_tops():
-    """Exhaustive: whenever the top hit belongs to a pair, that pair wins."""
+    """Exhaustive: the runner-up never influences the answer."""
     everything = ["1", "14", "2", "1/2", "9", None]
     for top in everything:
         for second in everything:
-            result = choose_pair(top, second, CONFIG)
-            if pair_of(top, CONFIG):
-                assert result == pair_of(top, CONFIG), f"top={top} second={second}"
+            assert choose_pair(top, second, CONFIG) == pair_of(top, CONFIG), \
+                f"top={top} second={second}"

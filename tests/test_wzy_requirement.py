@@ -17,16 +17,16 @@ import pytest
 from unittest.mock import patch
 from pathlib import Path
 
+from helpers import SUIS, main_config, stage1_double
 from swineotype.config import load_config
 from swineotype.stages import parse_whitelist_headers, stage1_score
-
-SUIS = "Streptococcus suis"
 
 
 def cfg(**over):
     c = {"min_pid": 85.0, "min_cov": 0.8, "plurality": 0.6, "delta": 100,
          "ambig_set": {"1", "14", "2", "1/2"}, "keep_debug": False,
-         "tmp_dir": "tmp", "require_wzy": 1}
+         "tmp_dir": "tmp", "require_wzy": 1,
+         "pair_1_14": {"1", "14"}, "pair_2_1_2": {"2", "1/2"}}
     c.update(over)
     return c
 
@@ -149,59 +149,70 @@ def test_require_wzy_can_be_switched_off():
 
 # --- the reported result ------------------------------------------------
 
-def make_main_config(**over):
-    c = {"target_species": SUIS, "pair_1_14": {"1", "14"}, "pair_2_1_2": {"2", "1/2"},
-         "ambig_set": {"1", "14", "2", "1/2"}, "delta": 100, "require_wzy": 1,
-         "wzxwzy_fasta": "w.fasta", "resolver_refs_fasta": "r.fasta"}
-    c.update(over)
-    return c
+def test_no_wzy_match_reports_a_lead_without_claiming_an_intact_locus(patched_stages, tmp_path):
+    """A wzx-only match establishes that no qualifying reference wzy was
+    found. It does NOT establish an intact locus, and it does not establish
+    novelty -- an absent, truncated or contig-broken wzy looks the same. The
+    old `candidate_novel_capsular_locus` warning asserted both."""
+    s1 = stage1_double(top=None, family_top=None, family_decisive=False,
+                       decisive=False, delta=0.0, top_species=None, top_wzx_only="27")
+    main_mod = patched_stages(s1, forbid_stage2=True)
 
-
-def test_no_wzy_match_is_reported_as_a_candidate_novel_locus(monkeypatch, tmp_path):
-    from swineotype import main as main_mod
-    s1 = {"top": None, "second": None, "decisive": False, "delta": 0.0,
-          "must_stage2_for_pair": False, "top_species": None, "top_wzx_only": "27"}
-    monkeypatch.setattr(main_mod, "stage1_score", lambda *a, **k: s1)
-    monkeypatch.setattr(main_mod, "ensure_unix_line_endings", lambda p, t: p)
-    monkeypatch.setattr(main_mod, "stage2_resolver_call",
-                        lambda *a, **k: pytest.fail("Stage 2 must not run without a callable type"))
-
-    r = main_mod.process_one("iso.fasta", tmp_path, 1, make_main_config(tmp_dir=tmp_path))
+    r = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
 
     assert r["status"] == "NO_WZY_MATCH"
     assert r["final_serotype"] == ""
     assert r["stage1_top"] == "", "no serotype may be implied"
     assert r["stage1_wzx_only"] == "27", "the lead is reported separately"
-    assert r["species"] == "", "wzx is not species-discriminating either"
-    assert "candidate_novel_capsular_locus" in r["warnings"]
+    assert r["matched_reference_taxon"] == "", "wzx is not species-discriminating either"
+    assert r["species"] == ""
+    assert "no_reference_wzy_matched" in r["warnings"]
     assert "nearest_wzx_relative:cps_type_27" in r["warnings"]
+    assert "locus_integrity_not_assessed" in r["warnings"]
+    assert "novel" not in r["warnings"], "novelty was never established"
 
 
-def test_stage2_status_is_surfaced(monkeypatch, tmp_path):
+def test_no_cps_match_infers_no_species_at_all(patched_stages, tmp_path):
+    """Regression: `species or config["target_species"]` filled the column
+    from a default, so an assembly that matched nothing -- an unrelated
+    organism, an empty file -- was reported as Streptococcus suis."""
+    s1 = stage1_double(top=None, family_top=None, family_decisive=False,
+                       decisive=False, delta=0.0, top_species=None, top_wzx_only=None)
+    main_mod = patched_stages(s1, forbid_stage2=True)
+
+    r = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
+
+    assert r["status"] == "NO_CPS_MATCH"
+    assert r["species"] == ""
+    assert r["matched_reference_taxon"] == ""
+    assert r["input_species"] == ""
+    assert r["species_assessment"] == "NOT_ASSESSED"
+    assert r["final_serotype"] == ""
+    assert r["family_serotype"] == ""
+    assert "no_cps_reference_matched" in r["warnings"]
+
+
+def test_stage2_status_is_surfaced(patched_stages, tmp_path):
     """It was computed in process_one and then discarded, so a user could not
     see why Stage 2 produced nothing."""
-    from swineotype import main as main_mod
-    s1 = {"top": "2", "second": "1/2", "decisive": False, "delta": 10.0,
-          "must_stage2_for_pair": True, "top_species": SUIS, "top_wzx_only": None}
-    monkeypatch.setattr(main_mod, "stage1_score", lambda *a, **k: s1)
-    monkeypatch.setattr(main_mod, "ensure_unix_line_endings", lambda p, t: p)
-    monkeypatch.setattr(main_mod, "stage2_resolver_call", lambda *a, **k: None)
+    s1 = stage1_double(top="2", second="1/2", family_top="2_vs_1_2",
+                       family_second=None, decisive=False, delta=10.0)
+    main_mod = patched_stages(s1, s2=None)
 
-    r = main_mod.process_one("iso.fasta", tmp_path, 1, make_main_config(tmp_dir=tmp_path))
+    r = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
     assert r["stage2_status"] == "NO_HSP_OR_LOW_QUAL"
-    assert r["status"] == "NO_CALL_STAGE2"
+    assert r["status"] == "FAMILY_ONLY"
+    assert r["final_serotype"] == ""
+    assert r["family_serotype"] == "2 or 1/2", "the family result survives"
 
 
-def test_stage2_status_ok_on_a_successful_resolve(monkeypatch, tmp_path):
-    from swineotype import main as main_mod
-    s1 = {"top": "2", "second": "1/2", "decisive": False, "delta": 10.0,
-          "must_stage2_for_pair": True, "top_species": SUIS, "top_wzx_only": None}
-    ev = {"ref_id": "cps2K|pair=2_vs_1_2|pos=483|G_serotype=2|CT_serotype=1/2",
-          "contig": "c1", "contig_pos": 883, "strand": "+", "base": "G"}
-    monkeypatch.setattr(main_mod, "stage1_score", lambda *a, **k: s1)
-    monkeypatch.setattr(main_mod, "ensure_unix_line_endings", lambda p, t: p)
-    monkeypatch.setattr(main_mod, "stage2_resolver_call", lambda *a, **k: ev)
+def test_stage2_status_ok_on_a_successful_resolve(patched_stages, tmp_path):
+    from helpers import REF_2_12, resolver_double
+    s1 = stage1_double(top="2", second="1/2", family_top="2_vs_1_2",
+                       decisive=False, delta=10.0)
+    main_mod = patched_stages(s1, s2=resolver_double(REF_2_12, "TGG", contig_pos=883))
 
-    r = main_mod.process_one("iso.fasta", tmp_path, 1, make_main_config(tmp_dir=tmp_path))
+    r = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
     assert r["stage2_status"] == "OK"
     assert r["final_serotype"] == "2"
+    assert r["triplet"] == "TGG"

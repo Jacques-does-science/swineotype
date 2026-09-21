@@ -13,10 +13,9 @@ Leaving 29 true S. suis serotypes: 1-19, 21, 23-25, 27-31 and 1/2.
 """
 import pytest
 
+from helpers import SUIS, main_config, stage1_double
 from swineotype.config import load_config
 from swineotype.stages import header_tag, parse_whitelist_headers
-
-SUIS = "Streptococcus suis"
 
 REASSIGNED = {
     "20": "Streptococcus parasuis",
@@ -79,77 +78,74 @@ def test_reassigned_types_are_kept_not_deleted(type_to_species):
 
 # --- the gate -----------------------------------------------------------
 
-def make_config(**overrides):
-    cfg = {"target_species": SUIS, "pair_1_14": {"1", "14"}, "pair_2_1_2": {"2", "1/2"},
-           "ambig_set": {"1", "14", "2", "1/2"}, "delta": 100,
-           "wzxwzy_fasta": "whitelist.fasta", "resolver_refs_fasta": "resolver.fasta"}
-    cfg.update(overrides)
-    return cfg
-
-
 @pytest.mark.parametrize("cps_type, species", sorted(REASSIGNED.items()))
-def test_gate_rejects_a_non_target_species(monkeypatch, tmp_path, cps_type, species):
-    from swineotype import main as main_mod
+def test_gate_rejects_a_non_target_species(patched_stages, tmp_path, cps_type, species):
+    main_mod = patched_stages(stage1_double(top=cps_type, top_species=species),
+                              forbid_stage2=True)
 
-    s1 = {"top": cps_type, "second": None, "decisive": True, "delta": 5000.0,
-          "must_stage2_for_pair": False, "top_species": species}
-    monkeypatch.setattr(main_mod, "stage1_score", lambda *a, **k: s1)
-    monkeypatch.setattr(main_mod, "ensure_unix_line_endings", lambda p, t: p)
-    monkeypatch.setattr(main_mod, "stage2_resolver_call",
-                        lambda *a, **k: pytest.fail("Stage 2 must not run for a non-target species"))
-
-    row = main_mod.process_one("iso.fasta", tmp_path, 1, make_config(tmp_dir=tmp_path))
+    row = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
 
     assert row["status"] == "NON_TARGET_SPECIES"
-    assert row["species"] == species
+    assert row["matched_reference_taxon"] == species
+    assert row["species"] == species, "deprecated alias still carries it"
     assert row["final_serotype"] == "", "must not report a serotype for another organism"
     assert row["stage1_top"] == cps_type, "the cps type is still reported, as evidence"
     assert species.replace(" ", "_") in row["warnings"]
 
 
-def test_gate_lets_s_suis_through(monkeypatch, tmp_path):
-    from swineotype import main as main_mod
+def test_gate_lets_s_suis_through(patched_stages, tmp_path):
+    main_mod = patched_stages(stage1_double(top="9", second="7"))
 
-    s1 = {"top": "9", "second": "7", "decisive": True, "delta": 5000.0,
-          "must_stage2_for_pair": False, "top_species": SUIS}
-    monkeypatch.setattr(main_mod, "stage1_score", lambda *a, **k: s1)
-    monkeypatch.setattr(main_mod, "ensure_unix_line_endings", lambda p, t: p)
-
-    row = main_mod.process_one("iso.fasta", tmp_path, 1, make_config(tmp_dir=tmp_path))
+    row = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
 
     assert row["status"] == "STAGE1"
     assert row["final_serotype"] == "9"
-    assert row["species"] == SUIS
+    assert row["matched_reference_taxon"] == SUIS
 
 
-def test_target_species_is_configurable(monkeypatch, tmp_path):
+def test_target_species_is_configurable(patched_stages, tmp_path):
     """The gate compares against config, not a hard-coded string, so the panel
     can be repurposed without editing Python."""
-    from swineotype import main as main_mod
+    main_mod = patched_stages(stage1_double(top="22", top_species="Streptococcus parasuis"))
 
-    s1 = {"top": "22", "second": None, "decisive": True, "delta": 5000.0,
-          "must_stage2_for_pair": False, "top_species": "Streptococcus parasuis"}
-    monkeypatch.setattr(main_mod, "stage1_score", lambda *a, **k: s1)
-    monkeypatch.setattr(main_mod, "ensure_unix_line_endings", lambda p, t: p)
-
-    cfg = make_config(target_species="Streptococcus parasuis", tmp_dir=tmp_path)
+    cfg = main_config(target_species="Streptococcus parasuis", tmp_dir=tmp_path)
     row = main_mod.process_one("iso.fasta", tmp_path, 1, cfg)
 
     assert row["status"] == "STAGE1"
     assert row["final_serotype"] == "22"
-    assert row["species"] == "Streptococcus parasuis"
+    assert row["matched_reference_taxon"] == "Streptococcus parasuis"
 
 
-def test_unlabelled_type_is_not_blocked(monkeypatch, tmp_path):
+def test_unlabelled_type_is_not_blocked(patched_stages, tmp_path):
     """A reference with no [species=] tag should not be treated as foreign --
     fail open on the serotype, since the panel is S. suis by construction."""
-    from swineotype import main as main_mod
+    main_mod = patched_stages(stage1_double(top="9", top_species=None))
 
-    s1 = {"top": "9", "second": None, "decisive": True, "delta": 5000.0,
-          "must_stage2_for_pair": False, "top_species": None}
-    monkeypatch.setattr(main_mod, "stage1_score", lambda *a, **k: s1)
-    monkeypatch.setattr(main_mod, "ensure_unix_line_endings", lambda p, t: p)
-
-    row = main_mod.process_one("iso.fasta", tmp_path, 1, make_config(tmp_dir=tmp_path))
+    row = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
     assert row["status"] == "STAGE1"
     assert row["final_serotype"] == "9"
+    assert row["matched_reference_taxon"] == ""
+
+
+# --- the matched taxon is not an identification of the input ------------
+
+def test_matched_reference_taxon_is_not_reported_as_the_input_species(patched_stages, tmp_path):
+    """Reference metadata says what the reference is, not what the input is."""
+    main_mod = patched_stages(stage1_double(top="9"))
+
+    row = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
+
+    assert row["matched_reference_taxon"] == SUIS
+    assert row["input_species"] == "", "nothing measured the input"
+    assert row["species_assessment"] == "NOT_ASSESSED"
+
+
+def test_supplied_input_species_is_recorded_separately(patched_stages, tmp_path):
+    main_mod = patched_stages(stage1_double(top="9"))
+
+    row = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path),
+                               input_species="Streptococcus suis")
+
+    assert row["input_species"] == "Streptococcus suis"
+    assert row["species_assessment"] == "USER_SUPPLIED"
+    assert row["matched_reference_taxon"] == SUIS, "still a separate column"

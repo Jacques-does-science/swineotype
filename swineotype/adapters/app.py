@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 
+import csv
+import datetime
+import hashlib
+import json
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from glob import glob
 from typing import Optional, List
@@ -10,11 +15,87 @@ import pandas as pd
 import yaml
 import click
 
+# The workflow addresses every staged assembly as {sample}.fasta, so the
+# staged copy has to carry that exact suffix whatever the input was called.
+STAGED_SUFFIX = ".fasta"
+
+
 def log(msg: str):
     click.echo(f"[INFO] {msg}")
 
 def err(msg: str):
     click.echo(f"[ERROR] {msg}", file=sys.stderr)
+
+
+def unique_sample_names(paths: List[Path]) -> List[str]:
+    """Sample identities, disambiguated only where two inputs collide.
+
+    Two different `assembly.fasta` paths -- the normal shape of a batch over
+    per-assembler output directories -- both reduced to the stem "assembly".
+    They then shared one row in the sample sheet and one staged symlink, so
+    one sample's KMA result was reported for both.
+    """
+    stems = [p.stem for p in paths]
+    duplicated = {s for s, n in Counter(stems).items() if n > 1}
+    names = []
+    for path, stem in zip(paths, stems):
+        if stem in duplicated:
+            digest = hashlib.sha1(str(path.resolve()).encode()).hexdigest()[:8]
+            names.append(f"{stem}__{digest}")
+        else:
+            names.append(stem)
+    return names
+
+
+def stage_assembly(source: Path, dest: Path) -> None:
+    """Point `dest` at `source`, replacing whatever is already there.
+
+    `Path.exists()` follows symlinks, so a dangling link answered False and
+    the `symlink_to()` that followed raised FileExistsError -- while a link
+    that still resolved was kept even when it pointed at a previous run's file
+    of the same name. Both are fixed by never reusing an existing entry.
+    """
+    if dest.is_symlink() or dest.exists():
+        dest.unlink()
+    dest.symlink_to(source)
+
+
+def read_swineotype_summary(path: Path) -> pd.DataFrame:
+    """Read a swineotype summary, whichever delimiter it uses.
+
+    swineotype writes CSV. Reading it with ``sep="\t"`` does not raise: pandas
+    returns a single column whose name is the whole header line, so the
+    try/except around it never fired and the merge died later with
+    ``KeyError("sample")``. Sniff the header instead of guessing and catching.
+    """
+    with open(path, newline="") as fh:
+        header = fh.readline()
+    if not header.strip():
+        raise ValueError(f"{path} is empty; expected a swineotype summary with a 'sample' column")
+    delimiter = "\t" if "\t" in header else ","
+    fields = next(csv.reader([header], delimiter=delimiter))
+    if "sample" not in fields:
+        raise ValueError(
+            f"{path} has no 'sample' column (found: {fields}); "
+            f"expected a swineotype summary written by `swineotype --species suis`")
+    return pd.read_csv(path, sep=delimiter, dtype={"sample": str})
+
+
+def write_run_record(path: Path, assemblies: List[Path], sample_names: List[str],
+                     workflow_config: dict) -> Path:
+    """What was run, on what, with which settings."""
+    from swineotype import __version__
+    record = {
+        "swineotype_version": __version__,
+        "run_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "argv": sys.argv,
+        "adapter": "serovar_detector",
+        "samples": {name: str(path) for name, path in zip(sample_names, assemblies)},
+        "workflow_config": workflow_config,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2, default=str) + "\n")
+    return path
 
 
 def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype_summary: Optional[str]):
@@ -31,23 +112,43 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
     for d in (results_dir, tmp_dir, config_dir, logs_dir, schemas_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    # --- FIX: expand absolute glob patterns safely ---
+    # Expand absolute glob patterns safely, and fail on any pattern that
+    # matched nothing rather than quietly processing the ones that did.
     assemblies = []
+    unmatched = []
+    seen = set()
     for p in assembly:
         pattern = p.strip('"').strip("'")
-        assemblies.extend(Path(g).resolve() for g in glob(pattern))
+        matches = sorted(glob(pattern))
+        if not matches:
+            unmatched.append(pattern)
+        for g in matches:
+            resolved = Path(g).resolve()
+            # Overlapping patterns must not produce two sample-sheet rows and
+            # two staged links for one file.
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            assemblies.append(resolved)
 
+    if unmatched:
+        for pattern in unmatched:
+            err(f"No assembly matched: {pattern}")
+        sys.exit(2)
     if not assemblies:
-        err(f"No assemblies found for pattern(s): {', '.join(assembly)}")
-        sys.exit(1)
+        err("No assemblies to process")
+        sys.exit(2)
     log(f"Found {len(assemblies)} assemblies")
+
+    sample_names = unique_sample_names(assemblies)
 
     # Write sample_sheet.csv for Snakemake/peppy
     sample_sheet_csv = schemas_dir / "sample_sheet.csv"
-    with open(sample_sheet_csv, "w") as fh:
-        fh.write("sample_name,type\n")
-        for fa in assemblies:
-            fh.write(f"{fa.stem},Assembly\n")
+    with open(sample_sheet_csv, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["sample_name", "type"])
+        for name in sample_names:
+            writer.writerow([name, "Assembly"])
     log(f"Wrote samples table with {len(assemblies)} assemblies → {sample_sheet_csv}")
 
 
@@ -105,20 +206,19 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
     log("[INFO] Effective config.yaml contents:")
     print(yaml.dump(config, sort_keys=False))
 
+    # Persist a run record next to the results, as the suis path does, so the
+    # run is reproducible without having to reconstruct the invocation.
+    write_run_record(outdir / "swineotype_app_run.json", assemblies, sample_names, config)
+
     # Create symlinks for the assembly files in the tmp directory, which is what
     # the serovar_detector workflow expects.
     assembly_tmp_dir = tmp_dir / "assemblies"
     assembly_tmp_dir.mkdir(parents=True, exist_ok=True)
     log(f"Creating symlinks for assemblies in {assembly_tmp_dir}")
-    for asm_path in assemblies:
-        symlink_path = assembly_tmp_dir / asm_path.name
-        if not symlink_path.exists():
-            symlink_path.symlink_to(asm_path)
-        else:
-            # Overwrite if it's a broken link, for example
-            if not symlink_path.resolve(strict=False).exists():
-                symlink_path.unlink()
-                symlink_path.symlink_to(asm_path)
+    for asm_path, name in zip(assemblies, sample_names):
+        # `{sample}.fasta`, always: the workflow's input pattern is literal, so
+        # staging a .fa or .fna under its own name left the rule with no input.
+        stage_assembly(asm_path, assembly_tmp_dir / f"{name}{STAGED_SUFFIX}")
 
 
     # Run Snakemake
@@ -148,18 +248,24 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
     if swineotype_summary:
         swineo = Path(swineotype_summary).resolve()
         
-        app_df = pd.read_csv(app_results, sep="\t")
+        # serovar.tsv is written by readr::write_tsv in the workflow's R
+        # summariser: a real TSV, with a known header.
+        app_df = pd.read_csv(app_results, sep="\t", dtype=str)
+        missing = {"Sample", "Suggested_serovar"} - set(app_df.columns)
+        if missing:
+            err(f"{app_results} is missing expected column(s): {sorted(missing)}")
+            sys.exit(1)
         app_clean = app_df.rename(
             columns={"Sample": "sample", "Suggested_serovar": "app_serovar"}
         )[["sample", "app_serovar"]]
 
         if swineo.exists():
             log(f"Merging APP results with existing summary → {swineo}")
-            # Try TSV then CSV automatically
             try:
-                suis_df = pd.read_csv(swineo, sep="\t")
-            except Exception:
-                suis_df = pd.read_csv(swineo)
+                suis_df = read_swineotype_summary(swineo)
+            except ValueError as exc:
+                err(str(exc))
+                sys.exit(1)
 
             merged = suis_df.merge(app_clean, on="sample", how="outer")
             merged.to_csv(swineo, index=False)
