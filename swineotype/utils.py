@@ -1,6 +1,7 @@
 import hashlib
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 import click
@@ -17,6 +18,20 @@ def gzip_file(file_path: str):
         with gzip.open(f"{file_path}.gz", 'wb') as f_out:
             f_out.writelines(f_in)
     os.remove(file_path)
+
+def unique_run_names(paths) -> list[str]:
+    """Per-sample names, disambiguated only where two inputs share a stem.
+
+    Two inputs called `assembly.fasta` -- the normal shape of a batch over
+    per-assembler output directories -- would otherwise overwrite each other's
+    outputs, and the APP adapter would stage them under one sample identity.
+    """
+    stems = [Path(p).stem for p in paths]
+    duplicated = {s for s, n in Counter(stems).items() if n > 1}
+    return [f"{stem}__{hashlib.sha1(str(Path(p).resolve()).encode()).hexdigest()[:8]}"
+            if stem in duplicated else stem
+            for p, stem in zip(paths, stems)]
+
 
 def ensure_unix_line_endings(file_path: str, tmp_dir: str) -> str:
     """Stage an assembly into tmp_dir with LF line endings.

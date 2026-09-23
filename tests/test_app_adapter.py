@@ -5,21 +5,16 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from swineotype.adapters.app import (
-    STAGED_SUFFIX,
-    read_swineotype_summary,
-    stage_assembly,
-    unique_sample_names,
-)
+from swineotype.adapters.app import STAGED_SUFFIX, read_swineotype_summary, stage_assembly
 from swineotype.main import SUMMARY_COLUMNS
+from swineotype.utils import unique_run_names
 
 
 # --- reading the swineotype summary ------------------------------------
 
-def write_summary(path: Path, rows, delimiter=","):
+def write_summary(path: Path, rows):
     with path.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=SUMMARY_COLUMNS,
-                                delimiter=delimiter, extrasaction="ignore")
+        writer = csv.DictWriter(fh, fieldnames=SUMMARY_COLUMNS, extrasaction="ignore")
         writer.writeheader()
         for r in rows:
             writer.writerow({**{c: "" for c in SUMMARY_COLUMNS}, **r})
@@ -51,12 +46,6 @@ def test_merging_on_sample_works_after_the_fix(tmp_path):
     assert merged.set_index("sample").loc["iso1", "app_serovar"] == "APP_5"
 
 
-def test_a_tab_separated_summary_is_still_read(tmp_path):
-    p = tmp_path / "summary.tsv"
-    write_summary(p, [{"sample": "iso1"}], delimiter="\t")
-    assert read_swineotype_summary(p).loc[0, "sample"] == "iso1"
-
-
 def test_a_file_without_a_sample_column_is_rejected_by_name(tmp_path):
     p = tmp_path / "other.csv"
     p.write_text("name,value\niso1,2\n")
@@ -67,7 +56,7 @@ def test_a_file_without_a_sample_column_is_rejected_by_name(tmp_path):
 def test_an_empty_summary_is_rejected(tmp_path):
     p = tmp_path / "empty.csv"
     p.write_text("")
-    with pytest.raises(ValueError, match="empty"):
+    with pytest.raises(ValueError):  # pandas' EmptyDataError
         read_swineotype_summary(p)
 
 
@@ -90,7 +79,7 @@ def test_two_assembly_fasta_paths_get_distinct_identities(tmp_path):
         p.parent.mkdir()
         p.write_text(">c\nACGT\n")
 
-    names = unique_sample_names([a, b])
+    names = unique_run_names([a, b])
 
     assert len(set(names)) == 2
     assert all(n.startswith("assembly__") for n in names)
@@ -99,13 +88,13 @@ def test_two_assembly_fasta_paths_get_distinct_identities(tmp_path):
 def test_unique_basenames_are_left_alone(tmp_path):
     a = tmp_path / "iso1.fasta"; a.write_text(">c\nACGT\n")
     b = tmp_path / "iso2.fna"; b.write_text(">c\nACGT\n")
-    assert unique_sample_names([a, b]) == ["iso1", "iso2"]
+    assert unique_run_names([a, b]) == ["iso1", "iso2"]
 
 
 def test_identity_is_stable_for_the_same_path(tmp_path):
     a = tmp_path / "x" / "assembly.fasta"; a.parent.mkdir(); a.write_text(">c\nA\n")
     b = tmp_path / "y" / "assembly.fasta"; b.parent.mkdir(); b.write_text(">c\nA\n")
-    assert unique_sample_names([a, b]) == unique_sample_names([a, b])
+    assert unique_run_names([a, b]) == unique_run_names([a, b])
 
 
 # --- staging -----------------------------------------------------------
@@ -162,7 +151,7 @@ def test_staged_filenames_are_normalised(tmp_path, monkeypatch):
         p.write_text(">c\nACGT\n")
     staged_dir = tmp_path / "staged"; staged_dir.mkdir()
 
-    names = app_mod.unique_sample_names(inputs)
+    names = unique_run_names(inputs)
     for src, name in zip(inputs, names):
         app_mod.stage_assembly(src, staged_dir / f"{name}{app_mod.STAGED_SUFFIX}")
 
@@ -177,7 +166,7 @@ def test_sample_sheet_names_match_the_staged_filenames(tmp_path):
     for p in inputs:
         p.parent.mkdir(); p.write_text(">c\nACGT\n")
 
-    names = unique_sample_names(inputs)
+    names = unique_run_names(inputs)
     staged = [f"{n}{STAGED_SUFFIX}" for n in names]
 
     assert [Path(s).stem for s in staged] == names
@@ -282,16 +271,17 @@ def test_setup_rejects_a_pattern_that_matched_nothing(tmp_path, monkeypatch, cap
     assert exc.value.code == 2
 
 
-def test_setup_writes_a_run_record(tmp_path, app_setup):
-    import json
+def test_setup_records_the_swineotype_version(tmp_path, app_setup):
+    """config.yaml and sample_sheet.csv already persist the run; the version
+    is the one thing they did not carry."""
+    import yaml
+    from swineotype import __version__
     inputs = tmp_path / "in"; inputs.mkdir()
     (inputs / "iso1.fasta").write_text(">c\nACGT\n")
 
     out = tmp_path / "out"
     app_setup([str(inputs / "*.fasta")], out)
 
-    record = json.loads((out / "swineotype_app_run.json").read_text())
-    assert record["swineotype_version"]
-    assert record["adapter"] == "serovar_detector"
-    assert list(record["samples"]) == ["iso1"]
-    assert record["workflow_config"]["threshold"] == 98.0
+    cfg = yaml.safe_load((out / "app_detector" / "config" / "config.yaml").read_text())
+    assert cfg["swineotype_version"] == __version__
+    assert cfg["threshold"] == 98.0

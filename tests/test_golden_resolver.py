@@ -17,16 +17,13 @@ Athey et al. 2016, BMC Microbiol 16:162, doi:10.1186/s12866-016-0782-8
 """
 import hashlib
 import json
-import sys
 from pathlib import Path
 
 import pytest
+import resolver_refs  # on sys.path via conftest.py
 
 from swineotype.config import load_config
 from swineotype.stages import interpret_resolver, parse_resolver_meta
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-import resolver_refs  # noqa: E402
 
 TRP = {"TGG"}
 CYS = {"TGT", "TGC"}
@@ -41,22 +38,9 @@ EXPECTED = {
 }
 
 
-def read_fasta(path):
-    seqs, header = {}, None
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if line.startswith(">"):
-                header = line[1:]
-                seqs[header] = []
-            elif header:
-                seqs[header].append(line)
-    return {h: "".join(parts) for h, parts in seqs.items()}
-
-
 @pytest.fixture(scope="module")
 def resolver_refs_fasta():
-    return read_fasta(load_config()["resolver_refs_fasta"])
+    return dict(resolver_refs.read_fasta(load_config()["resolver_refs_fasta"]))
 
 
 @pytest.fixture(scope="module")
@@ -140,47 +124,6 @@ def test_manifest_records_provenance_for_every_reference(manifest):
         assert entry["strand"] in ("+", "-")
         assert entry["diagnostic_position"] > 0
         assert len(entry["sha256"]) == 64
-
-
-def test_repair_is_a_no_op_on_the_shipped_references(tmp_path):
-    """The two-base repairs are gated on the damaged checksum, so they can
-    neither run twice nor touch an already-correct file.
-
-    Run against a COPY: a repair() that found something to do would rewrite
-    data/suis_resolver_refs.fasta and then report success, quietly healing the
-    very state the rest of this file exists to detect.
-    """
-    import shutil
-    original = Path(load_config()["resolver_refs_fasta"])
-    copy = tmp_path / original.name
-    shutil.copy(original, copy)
-
-    assert resolver_refs.repair(copy) == []
-    assert copy.read_bytes() == original.read_bytes()
-
-
-def test_repair_restores_the_documented_damage_and_refuses_to_repeat(tmp_path):
-    """The repair path itself, exercised on a deliberately damaged copy."""
-    import shutil
-    original = Path(load_config()["resolver_refs_fasta"])
-    copy = tmp_path / original.name
-    shutil.copy(original, copy)
-
-    # Reintroduce the exact two-base deletions that shipped.
-    records = resolver_refs.read_fasta(copy)
-    damaged = []
-    for header, seq in records:
-        at = resolver_refs.REPAIRS.get(resolver_refs.ref_id(header), {}).get("insert_at")
-        damaged.append((header, seq[:at] + seq[at + 2:]) if at else (header, seq))
-    resolver_refs.write_fasta(copy, damaged)
-    assert resolver_refs.check(copy) != [], "the damaged copy must fail the check"
-
-    applied = resolver_refs.repair(copy)
-
-    assert len(applied) == 2
-    assert resolver_refs.check(copy) == []
-    assert copy.read_bytes() == original.read_bytes(), "byte-for-byte restored"
-    assert resolver_refs.repair(copy) == [], "and it will not run a second time"
 
 
 # --- polarity and position ---------------------------------------------

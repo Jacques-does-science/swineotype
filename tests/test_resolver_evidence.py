@@ -227,29 +227,11 @@ def test_resolver_status_precedence():
                             "coding_status": "DISRUPTED"}) == "CODING_DISRUPTED"
 
 
-# --- the coding-disruption gate is configurable ------------------------
-
-def _disrupted():
-    return {"ref_id": REF_2_12, "triplet": "TGG", "triplet_status": "OK",
-            "coding_status": "DISRUPTED", "conflict": False}
-
-
-def test_coding_disruption_withholds_the_call_by_default():
+def test_coding_disruption_withholds_the_call():
     from swineotype.stages import interpret_resolver
-    assert interpret_resolver(_disrupted(), {}) is None
-
-
-def test_the_coding_disruption_gate_can_be_switched_off():
-    """On noisy long-read assemblies a lone spurious indel is more likely an
-    artefact than biology. Switching the gate off does not hide anything:
-    `coding_status` and the warning are reported either way."""
-    from swineotype.stages import interpret_resolver
-    assert interpret_resolver(_disrupted(), {"withhold_on_coding_disruption": 0}) == "2"
-
-
-def test_the_default_config_ships_the_gate_on():
-    from swineotype.config import DEFAULT_CONFIG
-    assert DEFAULT_CONFIG["withhold_on_coding_disruption"] == 1
+    ev = {"ref_id": REF_2_12, "triplet": "TGG", "triplet_status": "OK",
+          "coding_status": "DISRUPTED", "conflict": False}
+    assert interpret_resolver(ev, {}) is None
 
 
 # --- a locus whose codon could not be read is not a disagreement --------

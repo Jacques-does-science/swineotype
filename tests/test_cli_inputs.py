@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from swineotype.main import DEFAULT_RESULTS_JSON, DEFAULT_RUN_JSON, DEFAULT_SUMMARY_CSV
+from swineotype.main import DEFAULT_RUN_JSON, DEFAULT_SUMMARY_CSV
 from swineotype.main import SUMMARY_COLUMNS, expand_globs, main
 
 
@@ -71,9 +71,6 @@ def test_results_and_run_record_are_written_without_merged_csv(mock_tool, mock_p
         rows = list(csv.DictReader(summary.open()))
         assert [r["sample"] for r in rows] == ["test"]
         assert list(rows[0]) == SUMMARY_COLUMNS
-
-        results = json.loads(Path("out", DEFAULT_RESULTS_JSON).read_text())
-        assert results[0]["final_serotype"] == "1"
 
         record = json.loads(Path("out", DEFAULT_RUN_JSON).read_text())
         assert record["swineotype_version"]

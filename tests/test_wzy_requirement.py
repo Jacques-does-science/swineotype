@@ -14,39 +14,11 @@ not in the panel", not a serotype.
 Requiring wzx as well would be wrong: serotype 14 has no wzx reference.
 """
 import pytest
-from unittest.mock import patch
-from pathlib import Path
 
-from helpers import SUIS, main_config, stage1_double
+from helpers import main_config, run_stage1, stage1_cfg as cfg, stage1_double
+from helpers import blast_row as row
 from swineotype.config import load_config
-from swineotype.stages import parse_whitelist_headers, stage1_score
-
-
-def cfg(**over):
-    c = {"min_pid": 85.0, "min_cov": 0.8, "plurality": 0.6, "delta": 100,
-         "ambig_set": {"1", "14", "2", "1/2"}, "keep_debug": False,
-         "tmp_dir": "tmp", "require_wzy": 1,
-         "pair_1_14": {"1", "14"}, "pair_2_1_2": {"2", "1/2"}}
-    c.update(over)
-    return c
-
-
-def row(allele, bits, cov_len=100, qlen=100, pid=100, contig="c1"):
-    """One stage-1 BLAST row (11 columns)."""
-    return "\t".join([allele, contig, str(pid), str(cov_len), str(qlen), "0",
-                      str(bits), "1", str(cov_len), "1", str(cov_len)])
-
-
-def run_stage1(alleles, blast_rows, config=None, species=None):
-    """alleles: {allele_id: (type, geneclass)}"""
-    a2t = {a: t for a, (t, g) in alleles.items()}
-    a2g = {a: g for a, (t, g) in alleles.items()}
-    t2s = species or {t: SUIS for t, _ in alleles.values()}
-    with patch("swineotype.stages.ensure_tool"), \
-         patch("swineotype.stages.make_db_if_needed", return_value="db"), \
-         patch("swineotype.stages.run_blast", return_value="\n".join(blast_rows)), \
-         patch("swineotype.stages.parse_whitelist_headers", return_value=(a2t, a2g, t2s)):
-        return stage1_score("a.fasta", "w.fasta", 1, Path("run"), config or cfg())
+from swineotype.stages import parse_whitelist_headers
 
 
 # --- data invariant ----------------------------------------------------
@@ -130,12 +102,12 @@ def test_plurality_ignores_wzx_only_cross_hits():
 
     strict = run_stage1(alleles, rows, cfg(require_wzy=1))
     assert strict["top"] == "27"
-    assert strict["fraction"] == pytest.approx(1.0)
-    assert strict["decisive"] is True
+    assert strict["family_fraction"] == pytest.approx(1.0)
+    assert strict["family_decisive"] is True
 
     legacy = run_stage1(alleles, rows, cfg(require_wzy=0))
-    assert legacy["fraction"] < 0.6, "old behaviour: diluted by wzx-only types"
-    assert legacy["decisive"] is False
+    assert legacy["family_fraction"] < 0.6, "old behaviour: diluted by wzx-only types"
+    assert legacy["family_decisive"] is False
 
 
 def test_require_wzy_can_be_switched_off():
@@ -155,7 +127,7 @@ def test_no_wzy_match_reports_a_lead_without_claiming_an_intact_locus(patched_st
     novelty -- an absent, truncated or contig-broken wzy looks the same. The
     old `candidate_novel_capsular_locus` warning asserted both."""
     s1 = stage1_double(top=None, family_top=None, family_decisive=False,
-                       decisive=False, delta=0.0, top_species=None, top_wzx_only="27")
+                       top_species=None, top_wzx_only="27")
     main_mod = patched_stages(s1, forbid_stage2=True)
 
     r = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
@@ -177,7 +149,7 @@ def test_no_cps_match_infers_no_species_at_all(patched_stages, tmp_path):
     from a default, so an assembly that matched nothing -- an unrelated
     organism, an empty file -- was reported as Streptococcus suis."""
     s1 = stage1_double(top=None, family_top=None, family_decisive=False,
-                       decisive=False, delta=0.0, top_species=None, top_wzx_only=None)
+                       top_species=None, top_wzx_only=None)
     main_mod = patched_stages(s1, forbid_stage2=True)
 
     r = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
@@ -196,7 +168,7 @@ def test_stage2_status_is_surfaced(patched_stages, tmp_path):
     """It was computed in process_one and then discarded, so a user could not
     see why Stage 2 produced nothing."""
     s1 = stage1_double(top="2", second="1/2", family_top="2_vs_1_2",
-                       family_second=None, decisive=False, delta=10.0)
+                       family_second=None)
     main_mod = patched_stages(s1, s2=None)
 
     r = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
@@ -208,8 +180,7 @@ def test_stage2_status_is_surfaced(patched_stages, tmp_path):
 
 def test_stage2_status_ok_on_a_successful_resolve(patched_stages, tmp_path):
     from helpers import REF_2_12, resolver_double
-    s1 = stage1_double(top="2", second="1/2", family_top="2_vs_1_2",
-                       decisive=False, delta=10.0)
+    s1 = stage1_double(top="2", second="1/2", family_top="2_vs_1_2")
     main_mod = patched_stages(s1, s2=resolver_double(REF_2_12, "TGG", contig_pos=883))
 
     r = main_mod.process_one("iso.fasta", tmp_path, 1, main_config(tmp_dir=tmp_path))
