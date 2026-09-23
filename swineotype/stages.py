@@ -677,19 +677,22 @@ def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, 
     for ev in loci:
         ev["implied_serotype"] = implied_serotype(ev)
 
-    # Two loci conflict when both had their codon fully read and the codons
-    # differ -- TGG against TGT, or TGG against AGG. A locus whose codon could
-    # not be read (a partial alignment over a contig boundary, an ambiguity
-    # code, a deletion) is recorded but does not manufacture a disagreement:
-    # on a fragmented assembly the same physical gene routinely produces one
-    # complete and one truncated alignment.
-    determinate = {ev["implied_serotype"] for ev in loci if ev["implied_serotype"]}
-    read_codons = {ev["triplet"] for ev in loci if codon_was_read(ev)}
-    conflict = len(determinate) > 1 or len(read_codons) > 1
+    # Two loci conflict when both had their codon fully read and what the
+    # codons MEAN differs: TGG against TGT, or TGG against AGG. Comparing the
+    # codon spellings instead reported TGT against TGC as a conflict, although
+    # both encode Cys161 and so both imply the same serotype. A codon outside
+    # the scheme stands for itself, so it disagrees with any documented one.
+    #
+    # A locus whose codon could not be read (a partial alignment over a contig
+    # boundary, an ambiguity code, a deletion) is recorded but does not
+    # manufacture a disagreement: on a fragmented assembly the same physical
+    # gene routinely produces one complete and one truncated alignment.
+    readings = {ev["implied_serotype"] or ev["triplet"] for ev in loci if codon_was_read(ev)}
+    conflict = len(readings) > 1
 
     primary = loci[0]
     return {**primary, "loci": loci, "n_loci": len(loci), "conflict": conflict,
-            "conflicting_serotypes": sorted(determinate) if conflict else []}
+            "conflicting_readings": sorted(readings) if conflict else []}
 
 
 def resolver_status(ev: dict | None) -> str:

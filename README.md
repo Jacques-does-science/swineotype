@@ -189,7 +189,7 @@ The summary CSV contains the following key fields:
 | `family_fraction=<f>;family_delta=<d>` | The two family-level numbers behind that decision, so the margin can be inspected. |
 | `stage1_pair_ambiguous:<top>/<second>` | The top two individual *wzx/wzy* hits point at different families. Informational: the family decision above is what actually gates the call. |
 | `family_disagrees_with_top_label:<family>/<pair>` | The best-supported *family* is not the one the single highest-scoring type belongs to. The family decision governs; this records the disagreement. |
-| `conflicting_resolver_copies:<a>,<b>` | Distinct physical *cpsK* loci imply different serotypes. The exact label is withheld and both loci are kept in `resolver_loci`. |
+| `conflicting_resolver_copies:<a>,<b>` | Distinct physical *cpsK* loci imply different serotypes; a codon outside the scheme (e.g. `AGG`) is listed as itself. Synonymous codons (`TGT`/`TGC`) agree. The exact label is withheld and both loci are kept in `resolver_loci`. |
 | `resolver_loci:<n>` | How many distinct physical loci were found. |
 | `resolver_triplet_<state>:<codon>` | The diagnostic codon is not interpretable — see `triplet_status`. The call is withheld. |
 | `resolver_coding_disrupted:<detail>` | A frameshift or premature stop was detected around the diagnostic site. The call is withheld. |

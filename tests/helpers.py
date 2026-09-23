@@ -60,7 +60,7 @@ def resolver_double(ref_id, triplet, *, contig="c1", contig_pos=900, strand="+",
           "triplet_status": triplet_status, "coding_status": coding_status,
           "coding_detail": "", "bitscore": 1800.0,
           "locus": f"{contig}:1-1000", "n_loci": 1, "conflict": False,
-          "conflicting_serotypes": []}
+          "conflicting_readings": []}
     ev.update(over)
     from swineotype.stages import implied_serotype
     ev.setdefault("implied_serotype", implied_serotype(ev))

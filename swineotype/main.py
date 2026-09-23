@@ -270,8 +270,7 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
 
     if s2_ev:
         if s2_ev.get("conflict"):
-            others = ",".join(s2_ev.get("conflicting_serotypes") or []) or "differing_codons"
-            warnings.append(f"conflicting_resolver_copies:{others}")
+            warnings.append(f"conflicting_resolver_copies:{','.join(s2_ev['conflicting_readings'])}")
             warnings.append(f"resolver_loci:{s2_ev.get('n_loci')}")
         elif s2_ev.get("triplet_status") != "OK":
             warnings.append(f"resolver_triplet_{s2_ev['triplet_status'].lower()}:{s2_ev.get('triplet')}")
