@@ -10,46 +10,21 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from resolver_refs import load_manifest, read_fasta, sha256_of, write_fasta  # via conftest.py
 
 from swineotype.config import load_config
 
-RESOLVER_REPAIRS = {
-    # Inverse of scripts/resolver_refs.py: reproduce the two-base deletion the
-    # shipped references used to carry, so the same fixture can be run against
-    # the damaged reference set.
-    "cps2K": 881,
-    "cps14K": 890,
-}
-
-
-def read_fasta(path) -> dict[str, str]:
-    seqs, header = {}, None
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if line.startswith(">"):
-                header = line[1:]
-                seqs[header] = []
-            elif header and line:
-                seqs[header].append(line)
-    return {h: "".join(parts).upper() for h, parts in seqs.items()}
-
-
-def write_fasta(path: Path, records: dict[str, str], width: int = 60) -> Path:
-    with open(path, "w") as fh:
-        for header, seq in records.items():
-            fh.write(f">{header}\n")
-            for i in range(0, len(seq), width):
-                fh.write(seq[i:i + width] + "\n")
-    return path
+# Where the two-base (TG) deletion sat in the references as they shipped
+# before 0.2.0, so the same fixture can be run against that damaged set.
+DAMAGE_AT = {"cps2K": 881, "cps14K": 890}
 
 
 def resolver_records() -> dict[str, str]:
-    return read_fasta(load_config()["resolver_refs_fasta"])
+    return dict(read_fasta(load_config()["resolver_refs_fasta"]))
 
 
 def whitelist_records() -> dict[str, str]:
-    return read_fasta(load_config()["wzxwzy_fasta"])
+    return dict(read_fasta(load_config()["wzxwzy_fasta"]))
 
 
 def by_id(records: dict[str, str]) -> dict[str, str]:
@@ -58,12 +33,14 @@ def by_id(records: dict[str, str]) -> dict[str, str]:
 
 def damaged_resolver_fasta(path: Path) -> Path:
     """The reference set as it shipped, two bases short in cps2K and cps14K."""
+    shipped = {e["id"]: e["damaged_sha256"] for e in load_manifest()["references"]}
     out = {}
     for header, seq in resolver_records().items():
         name = header.split("|")[0]
-        if name in RESOLVER_REPAIRS:
-            at = RESOLVER_REPAIRS[name]
+        if name in DAMAGE_AT:
+            at = DAMAGE_AT[name]
             seq = seq[:at] + seq[at + 2:]
+            assert sha256_of(seq) == shipped[name], f"{name}: not the state that shipped"
         out[header] = seq
     return write_fasta(path, out)
 

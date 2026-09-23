@@ -81,7 +81,7 @@ def test_two_copies_with_different_codons_conflict():
     ev = run([resolver_row(REF_2_12, 483, "TGG", contig="cA"),
               resolver_row(REF_2_12, 483, "TGT", contig="cB")])
     assert ev["conflict"] is True
-    assert ev["conflicting_serotypes"] == ["1/2", "2"]
+    assert ev["conflicting_readings"] == ["1/2", "2"]
     assert ev["n_loci"] == 2
     assert resolver_status(ev) == "CONFLICTING_COPIES"
 
@@ -91,7 +91,7 @@ def test_conflict_is_not_resolved_by_bit_score():
     high = run([resolver_row(REF_2_12, 483, "TGG", contig="cA", bitscore=9999),
                 resolver_row(REF_2_12, 483, "TGT", contig="cB", bitscore=100)])
     assert high["conflict"] is True
-    assert high["conflicting_serotypes"] == ["1/2", "2"]
+    assert high["conflicting_readings"] == ["1/2", "2"]
 
 
 def test_conflict_is_not_resolved_by_fasta_order():
@@ -100,7 +100,7 @@ def test_conflict_is_not_resolved_by_fasta_order():
     reverse = run([resolver_row(REF_2_12, 483, "TGT", contig="cB"),
                    resolver_row(REF_2_12, 483, "TGG", contig="cA")])
     assert forward["conflict"] is reverse["conflict"] is True
-    assert forward["conflicting_serotypes"] == reverse["conflicting_serotypes"]
+    assert forward["conflicting_readings"] == reverse["conflicting_readings"]
 
 
 def test_both_pieces_of_evidence_are_preserved():
@@ -126,6 +126,28 @@ def test_one_valid_and_one_broken_copy_conflict():
     ev = run([resolver_row(REF_2_12, 483, "TGG", contig="cA"),
               resolver_row(REF_2_12, 483, "AGG", contig="cB")])
     assert ev["conflict"] is True
+    assert ev["conflicting_readings"] == ["2", "AGG"], \
+        "the undocumented codon is reported as itself, not dropped"
+
+
+@pytest.mark.parametrize("codon_a, codon_b, serotype", [
+    ("TGT", "TGC", "1/2"),
+    ("TGC", "TGT", "1/2"),
+])
+def test_synonymous_codons_in_two_copies_agree(codon_a, codon_b, serotype):
+    """Regression: codon SPELLINGS were compared, so a TGT copy and a TGC copy
+    were reported as conflicting -- with `conflicting_serotypes: ['1/2']`, a
+    single serotype listed as disagreeing with itself -- and the call was
+    withheld. Both encode Cys161; they imply the same serotype."""
+    from swineotype.stages import interpret_resolver
+    ev = run([resolver_row(REF_2_12, 483, codon_a, contig="cA"),
+              resolver_row(REF_2_12, 483, codon_b, contig="cB")])
+
+    assert ev["n_loci"] == 2
+    assert ev["conflict"] is False
+    assert ev["conflicting_readings"] == []
+    assert resolver_status(ev) == "OK"
+    assert interpret_resolver(ev, {}) == serotype
 
 
 def test_no_qualifying_alignment_returns_nothing():
@@ -205,29 +227,11 @@ def test_resolver_status_precedence():
                             "coding_status": "DISRUPTED"}) == "CODING_DISRUPTED"
 
 
-# --- the coding-disruption gate is configurable ------------------------
-
-def _disrupted():
-    return {"ref_id": REF_2_12, "triplet": "TGG", "triplet_status": "OK",
-            "coding_status": "DISRUPTED", "conflict": False}
-
-
-def test_coding_disruption_withholds_the_call_by_default():
+def test_coding_disruption_withholds_the_call():
     from swineotype.stages import interpret_resolver
-    assert interpret_resolver(_disrupted(), {}) is None
-
-
-def test_the_coding_disruption_gate_can_be_switched_off():
-    """On noisy long-read assemblies a lone spurious indel is more likely an
-    artefact than biology. Switching the gate off does not hide anything:
-    `coding_status` and the warning are reported either way."""
-    from swineotype.stages import interpret_resolver
-    assert interpret_resolver(_disrupted(), {"withhold_on_coding_disruption": 0}) == "2"
-
-
-def test_the_default_config_ships_the_gate_on():
-    from swineotype.config import DEFAULT_CONFIG
-    assert DEFAULT_CONFIG["withhold_on_coding_disruption"] == 1
+    ev = {"ref_id": REF_2_12, "triplet": "TGG", "triplet_status": "OK",
+          "coding_status": "DISRUPTED", "conflict": False}
+    assert interpret_resolver(ev, {}) is None
 
 
 # --- a locus whose codon could not be read is not a disagreement --------

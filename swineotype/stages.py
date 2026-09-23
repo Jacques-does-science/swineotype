@@ -49,13 +49,6 @@ S2_INVALID = "INVALID_TRIPLET"
 S2_CODING_DISRUPTED = "CODING_DISRUPTED"
 
 
-# There is deliberately no reverse_complement() here. BLAST reports sseq in
-# alignment orientation, already on the query strand, so a minus-strand hit
-# needs no complementing -- only its subject COORDINATE runs backwards. A
-# helper of that name sitting next to this code invites exactly the
-# double-complement bug the read-out is built to avoid.
-
-
 def header_tag(header: str, key: str) -> str | None:
     """Value of a `[key=value]` tag in a FASTA header, or None.
 
@@ -132,27 +125,19 @@ def _collinear(a, b) -> bool:
     return same_direction if a["strand"] == "+" else not same_direction
 
 
-def _merge_intervals(intervals):
-    merged = []
-    for s, e in sorted(intervals):
-        if merged and s <= merged[-1][1] + 1:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
-        else:
-            merged.append((s, e))
-    return merged
-
-
 def _metrics(hsps, qlen) -> dict:
-    """Coverage, identity and score for ONE selected set of HSPs."""
-    covered = sum(e - s + 1 for s, e in _merge_intervals([_q_span(h) for h in hsps]))
+    """Coverage, identity and score for ONE selected set of HSPs.
+
+    The set never overlaps in query space -- group_into_copies() and the split
+    chain both refuse overlapping HSPs -- so the covered length is a plain sum.
+    """
+    covered = sum(hi - lo + 1 for lo, hi in map(_q_span, hsps))
     aligned = sum(h["length"] for h in hsps)
     return {
         "coverage": (covered / qlen) if qlen else 0.0,
         "identity": (sum(h["pident"] * h["length"] for h in hsps) / aligned) if aligned else 0.0,
         "score": sum(h["bitscore"] for h in hsps),
         "aligned_len": aligned,
-        "covered_len": covered,
-        "qlen": qlen,
     }
 
 
@@ -222,10 +207,19 @@ def allele_evidence(hsps: list[dict], qlen: int, min_cov: float) -> dict:
         "contigs": contigs,
         "n_copies": len(copies),
         "strands": sorted({h["strand"] for h in chosen}),
-        "n_hsps": len(chosen),
         "subject_spans": sorted((h["sseqid"], min(h["sstart"], h["send"]),
                                  max(h["sstart"], h["send"])) for h in chosen),
     }
+
+
+# Resolver pair -> the config key listing its members.
+PAIR_KEYS = {"1_vs_14": "pair_1_14", "2_vs_1_2": "pair_2_1_2"}
+RESOLVABLE_FAMILIES = tuple(PAIR_KEYS)
+
+
+def pair_of(serotype: str | None, config: dict) -> str | None:
+    """Which resolver pair a serotype belongs to, or None."""
+    return next((pair for pair, key in PAIR_KEYS.items() if serotype in config[key]), None)
 
 
 def family_of(serotype: str | None, config: dict) -> str | None:
@@ -238,37 +232,16 @@ def family_of(serotype: str | None, config: dict) -> str | None:
     """
     if serotype is None:
         return None
-    if serotype in config.get("pair_1_14", ()):
-        return "1_vs_14"
-    if serotype in config.get("pair_2_1_2", ()):
-        return "2_vs_1_2"
-    return f"type:{serotype}"
+    return pair_of(serotype, config) or f"type:{serotype}"
 
 
-RESOLVABLE_FAMILIES = ("1_vs_14", "2_vs_1_2")
-
-FAMILY_MEMBERS = {"1_vs_14": ("1", "14"), "2_vs_1_2": ("2", "1/2")}
-
-
-def family_members(family: str | None, config: dict | None = None) -> tuple[str, ...]:
-    """The cps types a family contains, honouring a reconfigured pair set."""
-    if family is None:
-        return ()
-    if family.startswith("type:"):
-        return (family.split(":", 1)[1],)
-    key = {"1_vs_14": "pair_1_14", "2_vs_1_2": "pair_2_1_2"}.get(family)
-    configured = (config or {}).get(key) if key else None
-    if configured:
-        return tuple(sorted(configured, key=lambda s: (len(s), s)))
-    return FAMILY_MEMBERS.get(family, ())
-
-
-def family_label(family: str | None, config: dict | None = None) -> str:
+def family_label(family: str | None, config: dict) -> str:
     """Human-readable family-level result, e.g. `1 or 14`."""
-    members = family_members(family, config)
-    if members:
-        return " or ".join(members)
-    return family or ""
+    if family is None:
+        return ""
+    if family in PAIR_KEYS:
+        return " or ".join(sorted(config[PAIR_KEYS[family]], key=lambda s: (len(s), s)))
+    return family.removeprefix("type:")
 
 
 def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Path, config: dict):
@@ -325,8 +298,6 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
     type_best: dict[str, dict[str, float]] = defaultdict(dict)
     family_best: dict[str, dict[str, float]] = defaultdict(dict)
     genes_by_type = defaultdict(set)
-    family_types = defaultdict(set)
-    family_evidence = defaultdict(dict)
 
     for qseqid, ev in evidence_by_allele.items():
         st = allele_to_type.get(qseqid)
@@ -335,10 +306,7 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
         gc = allele_to_geneclass.get(qseqid) or "other"
         fam = family_of(st, config)
         type_best[st][gc] = max(type_best[st].get(gc, 0.0), ev["score"])
-        if ev["score"] >= family_best[fam].get(gc, 0.0):
-            family_best[fam][gc] = ev["score"]
-            family_evidence[fam][gc] = {"allele": qseqid, "type": st, **ev}
-        family_types[fam].add(st)
+        family_best[fam][gc] = max(family_best[fam].get(gc, 0.0), ev["score"])
         if allele_to_geneclass.get(qseqid):
             genes_by_type[st].add(gc)
 
@@ -361,11 +329,8 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
     eligible = [(t, s) for t, s in ranked_all if "wzy" in genes_by_type[t]] \
         if require_wzy else ranked_all
 
-    top, top_score = eligible[0] if eligible else (None, 0.0)
-    second, second_score = eligible[1] if len(eligible) > 1 else (None, 0.0)
-    total = sum(s for _, s in eligible)
-    fraction, delta = (top_score / total if total else 0.0), top_score - second_score
-    decisive = (fraction >= config["plurality"]) and (delta >= config["delta"])
+    top = eligible[0][0] if eligible else None
+    second = eligible[1][0] if len(eligible) > 1 else None
 
     # --- family-level confidence --------------------------------------
     #
@@ -390,26 +355,19 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
     # bit-score margin it must hold over the runner-up family. Both must pass.
     fam_decisive = (fam_fraction >= config["plurality"]) and (fam_delta >= config["delta"])
 
-    must_stage2_for_pair = fam_top in RESOLVABLE_FAMILIES
-
     # Best hit that is NOT callable for want of a wzy: the diagnostic for a
     # capsular locus outside the panel.
     wzx_only = [(t, s) for t, s in ranked_all if "wzy" not in genes_by_type[t]]
 
-    return {"scores": score_by_type, "top": top, "second": second, "fraction": fraction,
-            "delta": delta, "decisive": decisive,
-            "must_stage2_for_pair": must_stage2_for_pair,
+    return {"scores": score_by_type, "top": top, "second": second,
             "type_to_species": type_to_species,
             "top_species": type_to_species.get(top) if top else None,
             "genes_by_type": {t: sorted(g) for t, g in genes_by_type.items()},
             "top_wzx_only": wzx_only[0][0] if wzx_only else None,
             "family_scores": score_by_family,
-            "family_ranked": eligible_families,
             "family_top": fam_top, "family_second": fam_second,
             "family_fraction": fam_fraction, "family_delta": fam_delta,
             "family_decisive": fam_decisive,
-            "family_types": {f: sorted(t) for f, t in family_types.items()},
-            "family_evidence": {f: dict(g) for f, g in family_evidence.items()},
             "allele_evidence": evidence_by_allele}
 
 
@@ -436,26 +394,6 @@ def alignment_columns(qseq: str, sseq: str, qstart: int, sstart: int, send: int)
             spos += sstep
 
 
-def base_at_query_pos(qseq: str, sseq: str, qstart: int, sstart: int, send: int, pos: int):
-    """Read the subject base aligned to query position ``pos``.
-
-    Walks the gapped alignment column by column instead of computing
-    ``sstart + (pos - qstart)``. That arithmetic silently assumed an ungapped
-    HSP, so a single indel anywhere between the HSP start and the diagnostic
-    site shifted the read-out by one base -- the characteristic ONT error mode,
-    and enough to flip a serotype call.
-
-    Returns ``(base, contig_pos, strand)``. ``base`` is ``"-"`` when the
-    subject carries a deletion at the site, or ``None`` if the alignment does
-    not reach ``pos``.
-    """
-    strand = "+" if sstart <= send else "-"
-    for qpos, spos, _qchar, schar in alignment_columns(qseq, sseq, qstart, sstart, send):
-        if qpos == pos:
-            return ("-" if schar == "-" else schar.upper()), spos, strand
-    return None, None, strand
-
-
 def triplet_at_query_pos(qseq: str, sseq: str, qstart: int, sstart: int, send: int, pos: int) -> dict:
     """Read the whole diagnostic codon -- query positions ``pos-2..pos``.
 
@@ -463,6 +401,11 @@ def triplet_at_query_pos(qseq: str, sseq: str, qstart: int, sstart: int, send: i
     AGG codon (Arg) in the subject was reported as TGG (Trp) and called as
     serotype 2 or 14. The codon is only interpretable if all three of its bases
     were actually recovered, contiguously, from one subject locus.
+
+    Positions come from walking the gapped alignment, never from
+    ``sstart + (pos - qstart)``: that arithmetic assumes an ungapped HSP, so a
+    single upstream indel -- the characteristic ONT error -- shifted the
+    read-out by one base, enough to flip a serotype call.
 
     Returns the read-out plus the subject coordinate of each base and a status
     naming exactly why it is or is not interpretable.
@@ -483,8 +426,7 @@ def triplet_at_query_pos(qseq: str, sseq: str, qstart: int, sstart: int, send: i
     triplet = "".join(chars)
 
     result = {"triplet": triplet, "positions": positions, "strand": strand,
-              "contig_pos": positions[2], "base": chars[2],
-              "covered": [p in found for p in wanted]}
+              "contig_pos": positions[2], "base": chars[2]}
 
     if "?" in chars:
         result["triplet_status"] = TRIPLET_INCOMPLETE
@@ -538,15 +480,12 @@ def assess_coding_integrity(qseq: str, sseq: str, qstart: int, qend: int, qlen: 
         projected[qpos] = "-" if schar == "-" else schar.upper()
         qpos += 1
 
-    last_codon = qlen // 3  # the reference's own stop codon
-    premature = []
-    for codon_i in range(1, last_codon):
-        p = codon_i * 3
-        triplet = "".join(projected.get(x, "?") for x in (p - 2, p - 1, p))
-        if triplet in STOP_CODONS:
-            premature.append(codon_i)
+    # Every codon before the reference's own stop codon (codon qlen // 3).
+    premature = next((i for i in range(1, qlen // 3)
+                      if "".join(projected.get(x, "?") for x in (3 * i - 2, 3 * i - 1, 3 * i))
+                      in STOP_CODONS), None)
     if premature:
-        reasons.append(f"premature_stop:codon_{premature[0]}")
+        reasons.append(f"premature_stop:codon_{premature}")
 
     spans_cds = min(qstart, qend) <= 1 and max(qstart, qend) >= qlen
     if reasons:
@@ -557,8 +496,7 @@ def assess_coding_integrity(qseq: str, sseq: str, qstart: int, qend: int, qlen: 
         status = CODING_UNASSESSED
         reasons.append(f"alignment_covers_query_{min(qstart, qend)}-{max(qstart, qend)}_of_{qlen}")
 
-    return {"coding_status": status, "coding_detail": ";".join(reasons),
-            "insertions": insertions, "deletions": deletions}
+    return {"coding_status": status, "coding_detail": ";".join(reasons)}
 
 
 # A codon that was fully recovered: all three bases present, contiguous and
@@ -677,19 +615,22 @@ def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, 
     for ev in loci:
         ev["implied_serotype"] = implied_serotype(ev)
 
-    # Two loci conflict when both had their codon fully read and the codons
-    # differ -- TGG against TGT, or TGG against AGG. A locus whose codon could
-    # not be read (a partial alignment over a contig boundary, an ambiguity
-    # code, a deletion) is recorded but does not manufacture a disagreement:
-    # on a fragmented assembly the same physical gene routinely produces one
-    # complete and one truncated alignment.
-    determinate = {ev["implied_serotype"] for ev in loci if ev["implied_serotype"]}
-    read_codons = {ev["triplet"] for ev in loci if codon_was_read(ev)}
-    conflict = len(determinate) > 1 or len(read_codons) > 1
+    # Two loci conflict when both had their codon fully read and what the
+    # codons MEAN differs: TGG against TGT, or TGG against AGG. Comparing the
+    # codon spellings instead reported TGT against TGC as a conflict, although
+    # both encode Cys161 and so both imply the same serotype. A codon outside
+    # the scheme stands for itself, so it disagrees with any documented one.
+    #
+    # A locus whose codon could not be read (a partial alignment over a contig
+    # boundary, an ambiguity code, a deletion) is recorded but does not
+    # manufacture a disagreement: on a fragmented assembly the same physical
+    # gene routinely produces one complete and one truncated alignment.
+    readings = {ev["implied_serotype"] or ev["triplet"] for ev in loci if codon_was_read(ev)}
+    conflict = len(readings) > 1
 
     primary = loci[0]
     return {**primary, "loci": loci, "n_loci": len(loci), "conflict": conflict,
-            "conflicting_serotypes": sorted(determinate) if conflict else []}
+            "conflicting_readings": sorted(readings) if conflict else []}
 
 
 def resolver_status(ev: dict | None) -> str:
@@ -708,21 +649,11 @@ def resolver_status(ev: dict | None) -> str:
 def interpret_resolver(ev: dict | None, config: dict) -> str | None:
     """The exact serotype the resolver evidence supports, or None.
 
-    An exact call needs all of: no conflict between physical copies, a
-    complete contiguous diagnostic codon, and that codon being one of the
-    three the scheme defines. A positively-detected coding disruption also
-    withholds it, unless `withhold_on_coding_disruption` is switched off.
-    Anything short of that is withheld -- the family-level result is still
-    reported by the caller.
+    Only a clean Stage-2 outcome -- no conflict between physical copies, a
+    complete contiguous documented codon, no detected coding disruption --
+    supports an exact call. The caller still reports the family otherwise.
     """
-    if ev is None:
-        return None
-    if ev.get("conflict"):
-        return None
-    if ev.get("coding_status") == CODING_DISRUPTED \
-            and (config or {}).get("withhold_on_coding_disruption", True):
-        return None
-    return implied_serotype(ev)
+    return implied_serotype(ev) if resolver_status(ev) == S2_OK else None
 
 
 def parse_resolver_meta(qid: str):

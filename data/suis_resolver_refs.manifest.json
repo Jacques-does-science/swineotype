@@ -34,7 +34,7 @@
   },
   "notes": [
     "The 1_vs_14 references declare diagnostic position 492 and the 2_vs_1_2 references 483. The 9 bp offset is real: the 1/14 references carry 9 extra bases at the 5' end. The positions are intentional and verified; they must not be unified.",
-    "cps2K and cps14K shipped with a two-base (TG) deletion relative to their source records, which frameshifted the 3' two thirds of each gene. `python scripts/resolver_refs.py repair` restores them offline and refuses to act on a sequence that does not hash to the recorded damaged state.",
+    "cps2K and cps14K shipped before 0.2.0 with a two-base (TG) deletion relative to their source records, which frameshifted the 3' two thirds of each gene. damaged_sha256 records the checksum of that shipped state; `python scripts/resolver_refs.py check` rejects it.",
     "codon_index_in_reference is the codon number within THIS slice; canonical_residue is the CpsK residue it corresponds to. They differ for the 1_vs_14 references because of the 9 bp 5' extension."
   ],
   "references": [

@@ -21,16 +21,6 @@ DEFAULT_CONFIG = {
     "min_cov": 0.80,
     "min_res_pid": 90.0,
     "min_res_alen": 300,
-    # Withhold the exact serotype when the resolver alignment positively shows
-    # the coding sequence is disrupted (a frameshift, or a premature stop in
-    # the reference's reading frame). A frameshifted cpsK does not make the
-    # capsule the codon predicts, so the codon no longer supports the call.
-    #
-    # Set to 0 on noisy long-read assemblies, where a single spurious indel is
-    # common and is more likely an assembly artefact than real biology. The
-    # `coding_status` column and the `resolver_coding_disrupted` warning are
-    # reported either way, so switching this off does not hide anything.
-    "withhold_on_coding_disruption": 1,
     "keep_debug": 1,
     "gzip_debug": 0,
     "clean_temp": 0,
@@ -38,9 +28,7 @@ DEFAULT_CONFIG = {
     # other species identifies a different organism, not an S. suis serotype.
     "target_species": "Streptococcus suis",
     # The resolvable families. A type in neither is its own family and needs
-    # no within-family resolution. (`ambig_set` used to duplicate the union of
-    # these two and is gone: nothing read it once family membership was
-    # derived from the pairs themselves, so setting it had no effect.)
+    # no within-family resolution.
     "pair_1_14": {"1", "14"},
     "pair_2_1_2": {"2", "1/2"},
 }

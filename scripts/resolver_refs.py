@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check, repair and regenerate the Stage-2 resolver references.
+"""Check and regenerate the Stage-2 resolver references.
 
 The four resolver references are slices of four public records. Two of the
 shipped sequences carried a two-base deletion relative to their source record,
@@ -10,13 +10,12 @@ declared diagnostic position pointing at the right base only by accident.
 Everything this script needs in order to *verify* the shipped file is pinned in
 ``data/suis_resolver_refs.manifest.json``: accession.version, source
 coordinates, strand, diagnostic position and the SHA-256 of the normalized
-sequence. ``check`` and ``repair`` are therefore fully offline; only
-``regenerate`` touches the network, and it is never run by the test suite.
+sequence. ``check`` is therefore fully offline; only ``regenerate`` touches
+the network, and it is never run by the test suite.
 
 Commands
 --------
   check       verify data/suis_resolver_refs.fasta against the manifest
-  repair      apply the documented two-base repairs, offline, idempotently
   regenerate  re-extract from ENA and rewrite the FASTA (network; opt-in)
 
 Normalized sequence
@@ -43,24 +42,6 @@ LINE_WIDTH = 60
 
 STOP_CODONS = {"TAA", "TAG", "TGA"}
 
-# The only repairs this script will ever apply, and the exact state each one is
-# allowed to apply to. Keyed by reference id; a repair runs only when the
-# current sequence hashes to ``damaged_sha256``, so it can neither be applied
-# to an already-correct sequence nor applied twice.
-REPAIRS = {
-    "cps2K": {
-        "damaged_sha256": "e30a60ca4802106d5f659d1695111d7e6b6e3e44ac71ae907630472202922a2f",
-        "insert_at": 881,
-        "insert": "TG",
-    },
-    "cps14K": {
-        "damaged_sha256": "47dd5779a5853561901a4e5cd2a01921a968dcc9267c065e45968064e2374b86",
-        "insert_at": 890,
-        "insert": "TG",
-    },
-}
-
-
 # --- normalized sequence helpers ---------------------------------------
 
 
@@ -86,12 +67,14 @@ def read_fasta(path: Path) -> list[tuple[str, str]]:
     return [(h, normalized("".join(parts))) for h, parts in records]
 
 
-def write_fasta(path: Path, records: list[tuple[str, str]]) -> None:
+def write_fasta(path: Path, records) -> Path:
+    """Write a mapping, or (header, sequence) pairs, as wrapped FASTA."""
     with open(path, "w") as fh:
-        for header, seq in records:
+        for header, seq in dict(records).items():
             fh.write(f">{header}\n")
             for i in range(0, len(seq), LINE_WIDTH):
                 fh.write(seq[i:i + LINE_WIDTH] + "\n")
+    return path
 
 
 def ref_id(header: str) -> str:
@@ -169,49 +152,6 @@ def check(fasta_path: Path = FASTA_PATH, manifest_path: Path = MANIFEST_PATH) ->
     return failures
 
 
-# --- repair ------------------------------------------------------------
-
-
-def repair(fasta_path: Path = FASTA_PATH) -> list[str]:
-    """Apply the documented two-base repairs. Offline and idempotent.
-
-    A repair is applied only to a sequence that hashes to the recorded damaged
-    state, so running this twice, or on an already-correct file, is a no-op.
-    The repaired sequence is asserted against the manifest hash before the file
-    is written.
-    """
-    manifest = load_manifest()
-    entries = {e["id"]: e for e in manifest["references"]}
-    records = read_fasta(fasta_path)
-
-    applied, out = [], []
-    for header, seq in records:
-        name = ref_id(header)
-        spec = REPAIRS.get(name)
-        digest = sha256_of(seq)
-        if spec and digest == spec["damaged_sha256"]:
-            at = spec["insert_at"]
-            repaired = seq[:at] + spec["insert"] + seq[at:]
-            expected = entries[name]["sha256"]
-            got = sha256_of(repaired)
-            if got != expected:
-                raise SystemExit(f"[ERROR] {name}: repaired sha256 {got} != expected {expected}")
-            if len(repaired) != entries[name]["length"]:
-                raise SystemExit(f"[ERROR] {name}: repaired length {len(repaired)} "
-                                 f"!= expected {entries[name]['length']}")
-            problems = coding_problems(repaired)
-            if problems:
-                raise SystemExit(f"[ERROR] {name}: repaired sequence is not an intact CDS: {problems}")
-            applied.append(f"{name}: inserted {spec['insert']!r} after index {at}")
-            out.append((header, repaired))
-        else:
-            out.append((header, seq))
-
-    if applied:
-        write_fasta(fasta_path, out)
-    return applied
-
-
 # --- regeneration from the public records ------------------------------
 
 
@@ -277,7 +217,7 @@ def regenerate(fasta_path: Path = FASTA_PATH) -> list[str]:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["check", "repair", "regenerate"])
+    parser.add_argument("command", choices=["check", "regenerate"])
     parser.add_argument("--fasta", type=Path, default=FASTA_PATH)
     args = parser.parse_args(argv)
 
@@ -289,17 +229,6 @@ def main(argv=None) -> int:
             return 1
         print(f"[OK] {args.fasta} matches {MANIFEST_PATH.name}")
         return 0
-
-    if args.command == "repair":
-        applied = repair(args.fasta)
-        for a in applied:
-            print(f"[REPAIR] {a}")
-        if not applied:
-            print("[OK] nothing to repair")
-        failures = check(args.fasta)
-        for f in failures:
-            print(f"[FAIL] {f}")
-        return 1 if failures else 0
 
     notes = regenerate(args.fasta)
     for n in notes:

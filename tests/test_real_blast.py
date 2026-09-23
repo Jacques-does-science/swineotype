@@ -104,6 +104,23 @@ def test_single_t_copy_calls_serotype_1_2(tmp_path, t_copy):
     assert row["warnings"] == ""
 
 
+def test_synonymous_copies_agree_on_serotype_1_2(tmp_path, g_copy):
+    """Regression: a TGT copy and a TGC copy both encode Cys161 and both mean
+    1/2, but the conflict check compared codon spellings and withheld the
+    call. Built from the same corrected cps2K as the conflict fixture."""
+    tgt = with_base_at(g_copy, DIAGNOSTIC_INDEX0, "T")
+    tgc = with_base_at(g_copy, DIAGNOSTIC_INDEX0, "C")
+    assert (tgt[480:483], tgc[480:483]) == ("TGT", "TGC")
+
+    row = run(tmp_path, "synonymous", {"TGT_copy": tgt, "TGC_copy": tgc})
+
+    assert row["stage2_status"] == "OK"
+    assert row["final_serotype"] == "1/2"
+    assert "conflicting" not in row["warnings"]
+    assert "TGT_copy" in row["resolver_loci"] and "TGC_copy" in row["resolver_loci"], \
+        "both copies are still reported"
+
+
 def test_duplicate_equivalent_copies_do_not_conflict(tmp_path, g_copy):
     """Two identical copies agree, so there is nothing to withhold. Several
     references hitting them is not evidence of disagreement either."""

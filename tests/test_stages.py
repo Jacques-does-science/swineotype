@@ -3,7 +3,6 @@ from unittest.mock import patch
 from pathlib import Path
 
 from swineotype.stages import (
-    base_at_query_pos,
     interpret_resolver,
     stage1_score,
     stage2_resolver_call,
@@ -27,28 +26,8 @@ def ungapped_row(qseqid, pos, triplet, qlen=1000, contig="s1", sstart=1, bitscor
                       "1", str(qlen), str(sstart), str(send), qseq, sseq])
 
 
-def s1_row(allele, bits, contig="c1", pid=100, length=100, qlen=100,
-           qstart=1, qend=None, sstart=1, send=None):
-    qend = qend if qend is not None else length
-    send = send if send is not None else sstart + length - 1
-    return "\t".join([allele, contig, str(pid), str(length), str(qlen), "0", str(bits),
-                      str(qstart), str(qend), str(sstart), str(send)])
-
-
-def run_stage1(alleles, rows, cfg):
-    """alleles: {allele_id: (type, geneclass)}"""
-    a2t = {a: t for a, (t, g) in alleles.items()}
-    a2g = {a: g for a, (t, g) in alleles.items()}
-    t2s = {t: SUIS for t, _ in alleles.values()}
-    with patch("swineotype.stages.ensure_tool"), \
-         patch("swineotype.stages.make_db_if_needed", return_value="db"), \
-         patch("swineotype.stages.run_blast", return_value="\n".join(rows)), \
-         patch("swineotype.stages.parse_whitelist_headers", return_value=(a2t, a2g, t2s)):
-        return stage1_score("a.fasta", "w.fasta", 1, Path("run"), cfg)
-
-
 BASE_CFG = {"min_pid": 85.0, "min_cov": 0.8, "plurality": 0.6, "delta": 100,
-            "ambig_set": {"1", "14", "2", "1/2"}, "keep_debug": False, "tmp_dir": "tmp",
+            "keep_debug": False, "tmp_dir": "tmp",
             "pair_1_14": {"1", "14"}, "pair_2_1_2": {"2", "1/2"}}
 
 
@@ -79,8 +58,6 @@ def test_stage1_score(mock_parse_whitelist_headers, mock_make_db_if_needed, mock
 
     assert result["top"] == "14"
     assert result["second"] == "1"
-    assert result["decisive"] is True
-    assert result["must_stage2_for_pair"] is True
     # 1 and 14 are ONE family, so this is a within-family tie, not competition.
     assert result["family_top"] == "1_vs_14"
     assert result["family_decisive"] is True
@@ -125,7 +102,7 @@ def test_stage1_split_gene_still_counts_both_parts(mock_make_db, mock_run_blast,
             "split\tc1\t100\t50\t100\t0\t400\t1\t50\t1\t50\n"
             "split\tc2\t100\t50\t100\t0\t400\t51\t100\t1\t50\n"
         )
-        result = stage1_score("a.fasta", "w.fasta", 4, Path("run_dir"), cfg(ambig_set=set()))
+        result = stage1_score("a.fasta", "w.fasta", 4, Path("run_dir"), cfg())
 
     assert result["scores"]["9"] == 800.0
     assert result["allele_evidence"]["split"]["split"] is True, \
@@ -235,15 +212,16 @@ def test_interpret_resolver_of_nothing():
 
 
 # --- gap-aware read-out -------------------------------------------------
+#
+# These pinned the retired single-base reader; they now run against
+# triplet_at_query_pos(), which is what production calls.
 
-def test_base_at_query_pos_ungapped():
-    qseq = "ACGTACGTAC"
-    sseq = "ACGTGCGTAC"
-    base, pos, strand = base_at_query_pos(qseq, sseq, 1, 101, 110, 5)
-    assert (base, pos, strand) == ("G", 105, "+")
+def test_readout_ungapped():
+    t = triplet_at_query_pos("ACGTACGTAC", "ACGTGCGTAC", 1, 101, 110, 5)
+    assert (t["base"], t["contig_pos"], t["strand"]) == ("G", 105, "+")
 
 
-def test_base_at_query_pos_with_upstream_subject_insertion():
+def test_readout_with_upstream_subject_insertion():
     """Regression: sstart + (pos - qstart) assumed an ungapped HSP.
 
     An extra base in the subject upstream of the site shifted the read-out by
@@ -253,38 +231,32 @@ def test_base_at_query_pos_with_upstream_subject_insertion():
     qseq = "ACGT-ACGTAC"
     sseq = "ACGTAACGTGC"
     #  query position 9 is the 'G' in sseq (index 9), not index 8
-    base, _, _ = base_at_query_pos(qseq, sseq, 1, 1, 11, 9)
-    assert base == "G"
+    assert triplet_at_query_pos(qseq, sseq, 1, 1, 11, 9)["base"] == "G"
 
 
-def test_base_at_query_pos_with_upstream_subject_deletion():
-    qseq = "ACGTAACGTGC"
-    sseq = "ACGT-ACGTGC"
-    base, _, _ = base_at_query_pos(qseq, sseq, 1, 1, 10, 10)
-    assert base == "G"
+def test_readout_with_upstream_subject_deletion():
+    assert triplet_at_query_pos("ACGTAACGTGC", "ACGT-ACGTGC", 1, 1, 10, 10)["base"] == "G"
 
 
-def test_base_at_query_pos_minus_strand_needs_no_complementing():
+def test_readout_minus_strand_needs_no_complementing():
     """BLAST already reports sseq on the query strand for a minus-strand hit."""
-    qseq = "ACGTACGT"
-    sseq = "ACGTGCGT"
-    base, pos, strand = base_at_query_pos(qseq, sseq, 1, 200, 193, 5)
-    assert strand == "-"
-    assert base == "G"
-    assert pos == 196
+    t = triplet_at_query_pos("ACGTACGT", "ACGTGCGT", 1, 200, 193, 5)
+    assert t["strand"] == "-"
+    assert t["base"] == "G"
+    assert t["contig_pos"] == 196
 
 
-def test_base_at_query_pos_reports_deletion_at_the_site():
-    qseq = "ACGTACGT"
-    sseq = "ACGT-CGT"
-    base, pos, _ = base_at_query_pos(qseq, sseq, 1, 1, 7, 5)
-    assert base == "-"
-    assert pos is None
+def test_readout_reports_deletion_at_the_site():
+    t = triplet_at_query_pos("ACGTACGT", "ACGT-CGT", 1, 1, 7, 5)
+    assert t["base"] == "-"
+    assert t["contig_pos"] is None
+    assert t["triplet_status"] == "DELETED"
 
 
-def test_base_at_query_pos_off_the_end():
-    base, pos, _ = base_at_query_pos("ACGT", "ACGT", 1, 1, 4, 99)
-    assert base is None
+def test_readout_off_the_end():
+    t = triplet_at_query_pos("ACGT", "ACGT", 1, 1, 4, 99)
+    assert t["contig_pos"] is None
+    assert t["triplet_status"] == "INCOMPLETE"
 
 
 # --- whole-triplet read-out ---------------------------------------------
@@ -342,7 +314,7 @@ def test_triplet_partially_off_the_alignment():
     #  alignment starts at query position 4, diagnostic position 5
     t = triplet_at_query_pos("GGCC", "GGCC", 4, 1, 4, 5)
     assert t["triplet_status"] == "INCOMPLETE"
-    assert t["covered"] == [False, True, True]
+    assert t["triplet"] == "?GG", "the unreached position is marked, not guessed"
 
 
 def test_triplet_broken_by_a_subject_insertion_inside_the_codon():

@@ -21,16 +21,15 @@ from swineotype.stages import (
     RESOLVABLE_FAMILIES,
     S2_SKIPPED,
     family_label,
-    family_members,
-    family_of,
     interpret_resolver,
+    pair_of,
     resolver_status,
     stage1_score,
     stage2_resolver_call,
 )
 from swineotype.config import load_config
 from swineotype.adapters.app import run_app_analysis
-from swineotype.utils import ensure_tool, ensure_unix_line_endings
+from swineotype.utils import ensure_tool, ensure_unix_line_endings, unique_run_names
 
 SUMMARY_COLUMNS = ["sample", "sample_path", "run_dir",
                    "matched_reference_taxon", "input_species", "species_assessment",
@@ -42,7 +41,6 @@ SUMMARY_COLUMNS = ["sample", "sample_path", "run_dir",
                    "status", "family_serotype", "final_serotype", "warnings"]
 
 DEFAULT_SUMMARY_CSV = "swineotype_summary.csv"
-DEFAULT_RESULTS_JSON = "swineotype_results.json"
 DEFAULT_RUN_JSON = "swineotype_run.json"
 
 # --- statuses ---
@@ -63,29 +61,6 @@ SPECIES_USER_SUPPLIED = "USER_SUPPLIED"
 
 # -------- Main orchestration --------
 
-def pair_of(serotype: str | None, config: dict) -> str | None:
-    """Which resolver pair a serotype belongs to, or None."""
-    if serotype in config["pair_1_14"]: return "1_vs_14"
-    if serotype in config["pair_2_1_2"]: return "2_vs_1_2"
-    return None
-
-
-def choose_pair(s1_top: str | None, s1_second: str | None, config: dict) -> str | None:
-    """Pick the resolver pair implied by Stage 1's top candidate -- or none.
-
-    The runner-up is deliberately NOT a fallback. It used to be: with
-    top="9" and second="2" this returned "2_vs_1_2", Stage 2 read the cpsK
-    site and overwrote the unresolved top candidate with a confident "2". But
-    the cpsK site only distinguishes 2 from 1/2; it says nothing about whether
-    the isolate is a 9. Reading it in that situation manufactures confidence
-    out of a marker that was never asked the relevant question.
-
-    `s1_second` is still accepted so callers can log the runner-up, and so the
-    signature documents what is no longer consulted.
-    """
-    return pair_of(s1_top, config)
-
-
 def family_view(s1: dict, config: dict) -> dict:
     """Family-level reading of a Stage-1 result.
 
@@ -99,38 +74,12 @@ def family_view(s1: dict, config: dict) -> dict:
     level, so it is reported as not decisive rather than assumed confident.
     """
     top = s1.get("family_top")
-    if top is None and s1.get("top") is not None:
-        top = family_of(s1["top"], config)
-    types = (s1.get("family_types") or {}).get(top) or list(family_members(top, config))
-    if not types and s1.get("top"):
-        types = [s1["top"]]
     return {"top": top,
             "second": s1.get("family_second"),
             "decisive": bool(s1.get("family_decisive", False)),
             "fraction": s1.get("family_fraction", 0.0),
             "delta": s1.get("family_delta", 0.0),
-            "types": types,
             "label": family_label(top, config)}
-
-
-def unique_run_names(paths: list[str]) -> list[str]:
-    """Per-sample output directory names, disambiguated only where needed.
-
-    Two inputs sharing a basename would otherwise write their debug TSVs into
-    the same directory and overwrite each other -- the same collision that
-    affected the BLAST cache, and the one that makes a bad call impossible to
-    investigate afterwards.
-    """
-    stems = [Path(p).stem for p in paths]
-    duplicated = {s for s, n in Counter(stems).items() if n > 1}
-    names = []
-    for path, stem in zip(paths, stems):
-        if stem in duplicated:
-            digest = hashlib.sha1(str(Path(path).resolve()).encode()).hexdigest()[:8]
-            names.append(f"{stem}__{digest}")
-        else:
-            names.append(stem)
-    return names
 
 
 def _render_loci(s2_ev: dict | None) -> str:
@@ -194,7 +143,7 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
     assembly = ensure_unix_line_endings(assembly, config["tmp_dir"])
     warnings: list[str] = []
     s1 = stage1_score(assembly, config["wzxwzy_fasta"], threads, run_dir, config)
-    s1_top, s1_second = s1.get("top"), s1.get("second")
+    s1_top = s1.get("top")
     fam = family_view(s1, config)
 
     species_assessment = SPECIES_USER_SUPPLIED if input_species else SPECIES_NOT_ASSESSED
@@ -245,13 +194,12 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
         return row(NO_CALL_FAMILY_AMBIGUOUS, matched_taxon=matched_taxon,
                    warnings=warnings)
 
-    top_pair, second_pair = pair_of(s1_top, config), pair_of(s1_second, config)
-    if top_pair and second_pair and top_pair != second_pair:
-        warnings.append(f"stage1_pair_ambiguous:{s1_top}/{s1_second}")
-
     # A singleton family: the type IS the answer, no within-family site to read.
+    # The runner-up is never a fallback into a resolvable family: with top="9"
+    # and second="2" the tool used to read the cpsK site and report a
+    # confident "2", from a site that only separates 2 from 1/2.
     if fam["top"] not in RESOLVABLE_FAMILIES:
-        return row(STAGE1, final_sero=fam["types"][0] if fam["types"] else s1_top,
+        return row(STAGE1, final_sero=fam["top"].removeprefix("type:"),
                    matched_taxon=matched_taxon, warnings=warnings)
 
     # The FAMILY decision picks the resolver pair, not the top individual
@@ -260,7 +208,7 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
     # individual type -- and when they do, the family-level evidence is what
     # was actually assessed for confidence. Disagreement is worth recording.
     allowed_pair = fam["top"]
-    top_label_pair = choose_pair(s1_top, s1_second, config)
+    top_label_pair = pair_of(s1_top, config)
     if top_label_pair and top_label_pair != allowed_pair:
         warnings.append(f"family_disagrees_with_top_label:{allowed_pair}/{top_label_pair}")
 
@@ -270,8 +218,7 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
 
     if s2_ev:
         if s2_ev.get("conflict"):
-            others = ",".join(s2_ev.get("conflicting_serotypes") or []) or "differing_codons"
-            warnings.append(f"conflicting_resolver_copies:{others}")
+            warnings.append(f"conflicting_resolver_copies:{','.join(s2_ev['conflicting_readings'])}")
             warnings.append(f"resolver_loci:{s2_ev.get('n_loci')}")
         elif s2_ev.get("triplet_status") != "OK":
             warnings.append(f"resolver_triplet_{s2_ev['triplet_status'].lower()}:{s2_ev.get('triplet')}")
@@ -321,19 +268,6 @@ def expand_globs(paths: list[str]) -> tuple[list[str], list[str]]:
     return out, unmatched
 
 
-def jsonable(value):
-    """Config values, rendered for the run record."""
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, (set, frozenset)):
-        return sorted(value)
-    if isinstance(value, dict):
-        return {k: jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [jsonable(v) for v in value]
-    return value
-
-
 def _file_digest(path) -> str | None:
     try:
         return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -364,13 +298,9 @@ def run_record(config: dict, assemblies: list[str], rows: list[dict],
             "wzxwzy_fasta": str(config["wzxwzy_fasta"]),
             "wzxwzy_sha256": _file_digest(config["wzxwzy_fasta"]),
         },
-        "effective_config": jsonable(config),
+        "effective_config": config,
         "status_counts": dict(Counter(r["status"] for r in rows)),
     }
-
-
-class SummaryColumnMismatch(click.ClickException):
-    """The file being appended to was written by a different column set."""
 
 
 def write_summary_csv(path: Path, rows: list[dict], append: bool) -> None:
@@ -384,7 +314,7 @@ def write_summary_csv(path: Path, rows: list[dict], append: bool) -> None:
         with path.open(newline="") as fh:
             existing = next(csv.reader(fh), None)
         if existing is not None and existing != SUMMARY_COLUMNS:
-            raise SummaryColumnMismatch(
+            raise click.ClickException(
                 f"{path} has a different column set (probably written by an "
                 f"older swineotype). Appending would misalign every value. "
                 f"Use a new --merged_csv path, or move the old file aside.\n"
@@ -470,9 +400,12 @@ def main(assembly, out_dir, merged_csv, threads, species, input_species, config)
     # which thresholds and reference data produced the calls.
     summary_path = out_dir / DEFAULT_SUMMARY_CSV
     write_summary_csv(summary_path, merged_rows, append=False)
-    (out_dir / DEFAULT_RESULTS_JSON).write_text(json.dumps(merged_rows, indent=2) + "\n")
     record = run_record(config, assemblies, merged_rows, input_species)
-    (out_dir / DEFAULT_RUN_JSON).write_text(json.dumps(record, indent=2, default=str) + "\n")
+    # json.dumps recurses on its own; only the leaves it cannot encode need
+    # help. Sets are sorted so the record is stable between runs.
+    (out_dir / DEFAULT_RUN_JSON).write_text(json.dumps(
+        record, indent=2,
+        default=lambda o: sorted(o) if isinstance(o, (set, frozenset)) else str(o)) + "\n")
     click.echo(f"[INFO] Summary written: {summary_path}")
     click.echo(f"[INFO] Run record written: {out_dir / DEFAULT_RUN_JSON}")
 

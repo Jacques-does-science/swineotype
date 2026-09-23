@@ -45,7 +45,7 @@ Serotyping can be performed by specifying the target species (`suis` or `app`), 
 swineotype --species suis --assembly "data/swine_isolates/*.fasta" --out_dir results_suis --threads 8
 ```
 
-`--merged_csv` is optional: `results_suis/swineotype_summary.csv`, `swineotype_results.json` and `swineotype_run.json` are written regardless. A pattern that matches no file is now an **error** (exit code 2) rather than a successful run with an empty summary.
+`--merged_csv` is optional: `results_suis/swineotype_summary.csv` and `swineotype_run.json` are written regardless. A pattern that matches no file is now an **error** (exit code 2) rather than a successful run with an empty summary.
 
 `--input_species` records an identification you established elsewhere (ANI, a marker panel). It is stored verbatim and never used to make a call — this tool does not identify species. See [What this does not do](#what-this-does-not-do).
 
@@ -125,7 +125,7 @@ Re-extract from ENA and rewrite the FASTA (network; opt-in, never run by the tes
 python scripts/resolver_refs.py regenerate
 ```
 
-`cps2K` and `cps14K` previously shipped with a **two-base deletion** relative to their source records, which frameshifted the 3′ two-thirds of each gene and introduced five internal stop codons apiece. Because the deletion sat *downstream* of the diagnostic site, every position-level test still passed. `python scripts/resolver_refs.py repair` restores them offline; it is gated on the recorded damaged checksum, so it cannot run twice or act on a correct file.
+`cps2K` and `cps14K` previously shipped with a **two-base deletion** relative to their source records, which frameshifted the 3′ two-thirds of each gene and introduced five internal stop codons apiece. Because the deletion sat *downstream* of the diagnostic site, every position-level test still passed. The manifest records the checksum of that shipped state as `damaged_sha256`, and `check` rejects it.
 
 ### *Actinobacillus pleuropneumoniae* (Adapter Pipeline)
 
@@ -145,11 +145,10 @@ For APP, `swineotype` functions as an automated wrapper for the third-party **se
 | `[out_dir]/<sample>/` | Per-sample BLAST debug TSVs (`wzxwzy_vs_asm.tsv`, `resolver_vs_asm.tsv`). Named by the `run_dir` column. |
 | `[out_dir]/.swineotype_cache/` | Working directory: the staged (line-ending-normalised) assembly and its BLAST database, both named by a content hash. Safe to delete; it is rebuilt on the next run. |
 | `[out_dir]/swineotype_summary.csv` | **Primary Result.** All samples from this run, always written. Overwritten each run. |
-| `[out_dir]/swineotype_results.json` | The same rows as JSON, for programmatic use. |
 | `[out_dir]/swineotype_run.json` | Run record: swineotype version, timestamp, command line, resolved input paths, the **effective configuration** (every threshold actually used), SHA-256 of both reference FASTAs, the resolver manifest version, and per-status counts. |
 | `--merged_csv` | Optional additional CSV, **appended** across runs for batch accumulation. |
 
-> **Compatibility change.** The per-run summary, results JSON and run record are new and are written **by default**. Previously nothing machine-readable was produced unless `--merged_csv` was passed, and nothing recorded which thresholds or reference data produced a call. `--merged_csv` keeps its old append-on-existing behaviour, so use a fresh path per run or delete it first to avoid mixing results.
+> **Compatibility change.** The per-run summary and run record are new and are written **by default**. Previously nothing machine-readable was produced unless `--merged_csv` was passed, and nothing recorded which thresholds or reference data produced a call. `--merged_csv` keeps its old append-on-existing behaviour, so use a fresh path per run or delete it first to avoid mixing results.
 
 ### Interpretation of Summary Columns
 
@@ -187,9 +186,8 @@ The summary CSV contains the following key fields:
 | :--- | :--- |
 | `competing_cps_families:<a>/<b>` | Two *cps* families are not separated by the evidence. Nothing is resolved; the *cpsK* site cannot arbitrate between families. |
 | `family_fraction=<f>;family_delta=<d>` | The two family-level numbers behind that decision, so the margin can be inspected. |
-| `stage1_pair_ambiguous:<top>/<second>` | The top two individual *wzx/wzy* hits point at different families. Informational: the family decision above is what actually gates the call. |
 | `family_disagrees_with_top_label:<family>/<pair>` | The best-supported *family* is not the one the single highest-scoring type belongs to. The family decision governs; this records the disagreement. |
-| `conflicting_resolver_copies:<a>,<b>` | Distinct physical *cpsK* loci imply different serotypes. The exact label is withheld and both loci are kept in `resolver_loci`. |
+| `conflicting_resolver_copies:<a>,<b>` | Distinct physical *cpsK* loci imply different serotypes; a codon outside the scheme (e.g. `AGG`) is listed as itself. Synonymous codons (`TGT`/`TGC`) agree. The exact label is withheld and both loci are kept in `resolver_loci`. |
 | `resolver_loci:<n>` | How many distinct physical loci were found. |
 | `resolver_triplet_<state>:<codon>` | The diagnostic codon is not interpretable — see `triplet_status`. The call is withheld. |
 | `resolver_coding_disrupted:<detail>` | A frameshift or premature stop was detected around the diagnostic site. The call is withheld. |

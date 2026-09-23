@@ -4,7 +4,14 @@ Constants and builders live in tests/helpers.py, imported as a top-level
 module: pytest prepends tests/ to sys.path, and `tests` is a name already
 taken by an unrelated package in some environments.
 """
+import sys
+from pathlib import Path
+
 import pytest
+
+# scripts/resolver_refs.py is the one FASTA reader/writer and manifest checker;
+# the golden tests and the BLAST fixtures both import it.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 
 @pytest.fixture
