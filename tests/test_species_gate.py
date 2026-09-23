@@ -6,7 +6,7 @@ looks like -- but reporting one as "S. suis serotype 22" is wrong at the
 species level. These tests pin both the reference labels and the gate.
 
   20, 22, 26 -> Streptococcus parasuis     (Nomoto et al. 2015, IJSEM 65:438)
-  33         -> Streptococcus ruminantium  (Tohya et al. 2017, IJSEM 67:2224)
+  33         -> Streptococcus ruminantium  (Tohya et al. 2017, IJSEM 67:3660)
   32, 34     -> Streptococcus orisratti    (Hill et al. 2005, Vet Microbiol 107:63)
 
 Leaving 29 true S. suis serotypes: 1-19, 21, 23-25, 27-31 and 1/2.
