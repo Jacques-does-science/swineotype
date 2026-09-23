@@ -350,9 +350,9 @@ organism outside *S. suis* that carries an *S. suis*-like capsule locus (capsule
 move between related streptococci), and it does not separate *S. suis* from the wider
 *S. suis* complex, whose members can be misidentified by MALDI-TOF and are not reliably
 separated by the `recN` PCR ([Li et al. 2025](https://doi.org/10.1128/jcm.01030-25)).
-Confirm species with genome-level evidence — ANI against type strains (published thresholds: 93.17 % for
-authentic *S. suis*, 92.33 % for cluster delineation within the complex) or a
-conserved-marker panel — and record it with `--input_species`.
+Confirm species with genome-level evidence — ANI against type strains (Li et al. 2025
+separate species within the complex at 92.33 % ANI) or a conserved-marker panel — and
+record it with `--input_species`.
 
 ### NO_WZY_MATCH
 
