@@ -1,6 +1,6 @@
 import os
-import site
 import tempfile
+from importlib.resources import files
 from pathlib import Path
 
 import yaml
@@ -8,7 +8,6 @@ import yaml
 # --- Default Configuration ---
 
 DEFAULT_CONFIG = {
-    "data_dir": "data",
     "wzxwzy_fasta": "suis_wzxwzy_whitelist.fasta",
     "resolver_refs_fasta": "suis_resolver_refs.fasta",
     "tmp_dir": "",  # empty = derive per-run (see load_config)
@@ -23,7 +22,6 @@ DEFAULT_CONFIG = {
     "min_res_alen": 300,
     "keep_debug": 1,
     "gzip_debug": 0,
-    "clean_temp": 0,
     # Species this tool assigns serotypes for. A cps reference tagged with any
     # other species identifies a different organism, not an S. suis serotype.
     "target_species": "Streptococcus suis",
@@ -35,37 +33,11 @@ DEFAULT_CONFIG = {
 
 # --- Configuration Loading ---
 
-def get_root_dir() -> Path:
-    """
-    Finds the project root directory.
-
-    The logic is as follows:
-    1. If SWINEOTYPE_HOME is set, use it.
-    2. Check for a `data` directory next to the `swineotype` package.
-       This works for editable installs (`pip install -e .`).
-    3. Check for a `data` directory in `sys.prefix` for standard installs.
-    """
+def data_dir() -> Path:
+    """The reference data: shipped inside the package, or $SWINEOTYPE_HOME/data."""
     if "SWINEOTYPE_HOME" in os.environ:
-        return Path(os.environ["SWINEOTYPE_HOME"])
-
-    package_path = Path(__file__).parent
-
-    # Editable install: <root>/swineotype
-    editable_install_data_path = package_path.parent / "data"
-    if editable_install_data_path.exists():
-        return package_path.parent
-
-    # Standard install: <prefix>/lib/pythonX.Y/site-packages/swineotype
-    # and <prefix>/share/swineotype/data
-    for sp_path in site.getsitepackages():
-        if package_path.is_relative_to(sp_path):
-            prefix = Path(sp_path).parent.parent.parent
-            share_data_path = prefix / "share" / "swineotype" / "data"
-            if share_data_path.exists():
-                return prefix / "share" / "swineotype"
-
-    raise FileNotFoundError("Could not locate the `data` directory. "
-                            "Please set the SWINEOTYPE_HOME environment variable.")
+        return Path(os.environ["SWINEOTYPE_HOME"]) / "data"
+    return Path(str(files("swineotype") / "data"))
 
 
 def load_config(config_file: str | None = None) -> dict:
@@ -73,7 +45,6 @@ def load_config(config_file: str | None = None) -> dict:
     Loads configuration from a YAML file, filling in with defaults.
     """
     config = DEFAULT_CONFIG.copy()
-    root_dir = get_root_dir()
 
     if config_file:
         with open(config_file, "r") as f:
@@ -91,9 +62,7 @@ def load_config(config_file: str | None = None) -> dict:
         if env_var not in os.environ:
             continue
         raw = os.environ[env_var]
-        if isinstance(default, bool):
-            config[key] = raw.strip().lower() in ("1", "true", "yes", "on")
-        elif isinstance(default, (set, frozenset)):
+        if isinstance(default, (set, frozenset)):
             config[key] = {t.strip() for t in raw.split(",") if t.strip()}
         elif isinstance(default, int):
             config[key] = int(raw)
@@ -104,7 +73,7 @@ def load_config(config_file: str | None = None) -> dict:
 
     # --- Path Resolution ---
 
-    config["data_dir"] = root_dir / "data"
+    config["data_dir"] = data_dir()
     config["wzxwzy_fasta"] = config["data_dir"] / config["wzxwzy_fasta"]
     config["resolver_refs_fasta"] = config["data_dir"] / config["resolver_refs_fasta"]
 

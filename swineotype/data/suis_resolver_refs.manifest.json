@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "suis_resolver_refs",
   "data_version": "2026-09-21.1",
-  "target_fasta": "data/suis_resolver_refs.fasta",
+  "target_fasta": "swineotype/data/suis_resolver_refs.fasta",
   "description": "Stage-2 cpsK/cps1L resolver references. Each entry is a verbatim slice of a public record; the diagnostic position is the third (wobble) base of codon 161, which distinguishes Trp161 (TGG) from Cys161 (TGT/TGC).",
   "checksum": {
     "algorithm": "sha256",
