@@ -27,7 +27,6 @@ def test_run_blast(mock_run):
         ],
         check=True,
         capture_output=True,
-        cwd=None,
         text=True,
     )
 

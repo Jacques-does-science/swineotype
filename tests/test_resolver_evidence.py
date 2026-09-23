@@ -12,37 +12,15 @@ Two things have to be separated to fix that:
   * one reference hitting SEVERAL copies at different subject coordinates.
     That is a real disagreement, and the exact label must be withheld.
 """
-from pathlib import Path
-from unittest.mock import patch
-
 import pytest
 
-from helpers import REF_1_14, REF_2_12, REF_2_12_ALT
+from helpers import REF_1_14, REF_2_12, REF_2_12_ALT, resolver_row
+from helpers import run_stage2 as run
 from swineotype.stages import (
     assess_coding_integrity,
     collapse_to_loci,
     resolver_status,
-    stage2_resolver_call,
 )
-
-CFG = {"min_res_pid": 90, "min_res_alen": 100, "keep_debug": False, "tmp_dir": "tmp"}
-
-
-def resolver_row(qseqid, pos, triplet, contig="c1", sstart=1, bitscore=2000,
-                 qlen=1000, pident=100):
-    qseq = "A" * (pos - 3) + "TGG" + "A" * (qlen - pos)
-    sseq = "A" * (pos - 3) + triplet + "A" * (qlen - pos)
-    send = sstart + qlen - 1
-    return "\t".join([qseqid, contig, str(pident), str(qlen), str(qlen), "0",
-                      str(bitscore), "1", str(qlen), str(sstart), str(send), qseq, sseq])
-
-
-def run(rows, allowed_pair="2_vs_1_2"):
-    with patch("swineotype.stages.ensure_tool"), \
-         patch("swineotype.stages.make_db_if_needed", return_value="db"), \
-         patch("swineotype.stages.run_blast", return_value="\n".join(rows)):
-        return stage2_resolver_call("a.fa", "r.fa", 1, Path("run"), CFG, allowed_pair)
-
 
 # --- collapsing redundant alignments -----------------------------------
 
@@ -209,12 +187,9 @@ def test_a_partial_alignment_can_still_be_positively_disrupted():
     assert r["coding_status"] == "DISRUPTED"
 
 
-@pytest.mark.parametrize("status, expected", [
-    ("OK", "OK"),
-])
-def test_resolver_status_of_a_clean_locus(status, expected):
-    ev = {"triplet_status": status, "coding_status": "INTACT", "conflict": False}
-    assert resolver_status(ev) == expected
+def test_resolver_status_of_a_clean_locus():
+    ev = {"triplet_status": "OK", "coding_status": "INTACT", "conflict": False}
+    assert resolver_status(ev) == "OK"
 
 
 def test_resolver_status_precedence():

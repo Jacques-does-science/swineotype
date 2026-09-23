@@ -90,8 +90,33 @@ def run_stage1(alleles, blast_rows, config=None, species=None):
     a2t = {a: t for a, (t, g) in alleles.items()}
     a2g = {a: g for a, (t, g) in alleles.items()}
     t2s = species or {t: SUIS for t, _ in alleles.values()}
-    with patch("swineotype.stages.ensure_tool"), \
-         patch("swineotype.stages.make_db_if_needed", return_value="db"), \
+    with patch("swineotype.stages.make_db_if_needed", return_value="db"), \
          patch("swineotype.stages.run_blast", return_value="\n".join(blast_rows)), \
          patch("swineotype.stages.parse_whitelist_headers", return_value=(a2t, a2g, t2s)):
         return stage1_score("a.fasta", "w.fasta", 1, Path("run"), config or stage1_cfg())
+
+
+# --- a mocked stage2_resolver_call() ----------------------------------
+
+STAGE2_CFG = {"min_res_pid": 90, "min_res_alen": 100, "keep_debug": False, "tmp_dir": "tmp"}
+
+
+def resolver_row(qseqid, pos, triplet, contig="c1", sstart=1, bitscore=2000,
+                 qlen=1000, pident=100):
+    """A 13-column resolver row whose subject carries `triplet` at pos-2..pos.
+
+    The query carries the canonical TGG so the row is a plausible alignment;
+    only the subject varies.
+    """
+    qseq = "A" * (pos - 3) + "TGG" + "A" * (qlen - pos)
+    sseq = "A" * (pos - 3) + triplet + "A" * (qlen - pos)
+    return "\t".join([qseqid, contig, str(pident), str(qlen), str(qlen), "0", str(bitscore),
+                      "1", str(qlen), str(sstart), str(sstart + qlen - 1), qseq, sseq])
+
+
+def run_stage2(rows, allowed_pair="2_vs_1_2"):
+    """stage2_resolver_call() over canned resolver BLAST rows."""
+    from swineotype.stages import stage2_resolver_call
+    with patch("swineotype.stages.make_db_if_needed", return_value="db"), \
+         patch("swineotype.stages.run_blast", return_value="\n".join(rows)):
+        return stage2_resolver_call("a.fa", "r.fa", 1, Path("run"), STAGE2_CFG, allowed_pair)

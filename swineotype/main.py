@@ -19,7 +19,6 @@ from pathlib import Path
 from swineotype import __version__
 from swineotype.stages import (
     RESOLVABLE_FAMILIES,
-    S2_SKIPPED,
     family_label,
     interpret_resolver,
     pair_of,
@@ -43,44 +42,7 @@ SUMMARY_COLUMNS = ["sample", "sample_path", "run_dir",
 DEFAULT_SUMMARY_CSV = "swineotype_summary.csv"
 DEFAULT_RUN_JSON = "swineotype_run.json"
 
-# --- statuses ---
-NO_CPS_MATCH = "NO_CPS_MATCH"
-NO_WZY_MATCH = "NO_WZY_MATCH"
-NON_TARGET_SPECIES = "NON_TARGET_SPECIES"
-STAGE1 = "STAGE1"
-STAGE2 = "STAGE2"
-FAMILY_ONLY = "FAMILY_ONLY"
-NO_CALL_FAMILY_AMBIGUOUS = "NO_CALL_FAMILY_AMBIGUOUS"
-NO_CALL_PAIR_CONFLICT = "NO_CALL_PAIR_CONFLICT"
-
-CALLED_STATUSES = (STAGE1, STAGE2)
-
-# --- species assessment ---
-SPECIES_NOT_ASSESSED = "NOT_ASSESSED"
-SPECIES_USER_SUPPLIED = "USER_SUPPLIED"
-
 # -------- Main orchestration --------
-
-def family_view(s1: dict, config: dict) -> dict:
-    """Family-level reading of a Stage-1 result.
-
-    Confidence is established between FAMILIES -- {1,14}, {2,1/2}, and every
-    other type on its own -- before any within-family resolution is attempted.
-    Ambiguity inside a family is expected and is what Stage 2 settles;
-    ambiguity between families is not, and cannot be settled by a site that
-    only separates members of one family.
-
-    A Stage-1 result carrying no family fields has not been assessed at family
-    level, so it is reported as not decisive rather than assumed confident.
-    """
-    top = s1.get("family_top")
-    return {"top": top,
-            "second": s1.get("family_second"),
-            "decisive": bool(s1.get("family_decisive", False)),
-            "fraction": s1.get("family_fraction", 0.0),
-            "delta": s1.get("family_delta", 0.0),
-            "label": family_label(top, config)}
-
 
 def _render_loci(s2_ev: dict | None) -> str:
     """Every distinct physical resolver locus, as one auditable field."""
@@ -95,47 +57,6 @@ def _render_loci(s2_ev: dict | None) -> str:
     return ";".join(out)
 
 
-def result_row(source, run_dir, s1, s2_ev, final_sero, final_status,
-               matched_taxon, warnings, stage2_status=S2_SKIPPED,
-               family_sero="", input_species=None, species_assessment=SPECIES_NOT_ASSESSED,
-               fam=None):
-    """One summary row.
-
-    `sample` is the bare stem so it matches the key the APP adapter writes;
-    `sample_path` keeps the provenance.
-
-    Three separate columns carry what used to be conflated into `species`:
-    `matched_reference_taxon` is the organism the matched *reference* is
-    labelled with, `input_species` is an independently established identity if
-    one was supplied, and `species_assessment` says which of those happened.
-    `species` is retained as a deprecated alias of the first.
-    """
-    s2_ev = s2_ev or {}
-    fam = fam or {}
-    return {"sample": Path(source).stem, "sample_path": str(Path(source).resolve()),
-            "run_dir": run_dir.name,
-            "matched_reference_taxon": matched_taxon or "",
-            "input_species": input_species or "",
-            "species_assessment": species_assessment,
-            "species": matched_taxon or "",
-            "stage2_status": stage2_status,
-            "stage1_top": (s1 or {}).get("top") or "",
-            "stage1_family": fam.get("top") or "",
-            "stage1_family_label": fam.get("label") or "",
-            "stage1_wzx_only": (s1 or {}).get("top_wzx_only") or "",
-            "ref_id": s2_ev.get("ref_id", ""),
-            "contig": s2_ev.get("contig", ""), "contig_pos": s2_ev.get("contig_pos", ""),
-            "strand": s2_ev.get("strand", ""), "base": s2_ev.get("base", ""),
-            "triplet": s2_ev.get("triplet", ""),
-            "triplet_status": s2_ev.get("triplet_status", ""),
-            "coding_status": s2_ev.get("coding_status", ""),
-            "resolver_loci": _render_loci(s2_ev or None),
-            "status": final_status,
-            "family_serotype": family_sero or "",
-            "final_serotype": final_sero or "",
-            "warnings": ";".join(warnings)}
-
-
 def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
                 run_name: str | None = None, input_species: str | None = None):
     source = assembly
@@ -144,17 +65,43 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
     warnings: list[str] = []
     s1 = stage1_score(assembly, config["wzxwzy_fasta"], threads, run_dir, config)
     s1_top = s1.get("top")
-    fam = family_view(s1, config)
-
-    species_assessment = SPECIES_USER_SUPPLIED if input_species else SPECIES_NOT_ASSESSED
+    fam_top = s1.get("family_top")
+    fam_label = family_label(fam_top, config)
 
     def row(status, *, final_sero=None, s2_ev=None, matched_taxon=None,
-            warnings=(), stage2_status=S2_SKIPPED, family_sero=""):
-        return result_row(source, run_dir, s1, s2_ev, final_sero, status,
-                          matched_taxon, list(warnings),
-                          stage2_status=stage2_status, family_sero=family_sero,
-                          input_species=input_species,
-                          species_assessment=species_assessment, fam=fam)
+            warnings=(), stage2_status="SKIPPED", family_sero=""):
+        """One summary row.
+
+        `sample` is the bare stem so it matches the key the APP adapter writes;
+        `sample_path` keeps the provenance. Three columns carry what used to be
+        conflated into `species`: `matched_reference_taxon` is what the matched
+        *reference* is labelled with, `input_species` is an identity established
+        elsewhere if one was supplied, and `species_assessment` says which of
+        those happened. `species` is a deprecated alias of the first.
+        """
+        s2 = s2_ev or {}
+        return {"sample": Path(source).stem, "sample_path": str(Path(source).resolve()),
+                "run_dir": run_dir.name,
+                "matched_reference_taxon": matched_taxon or "",
+                "input_species": input_species or "",
+                "species_assessment": "USER_SUPPLIED" if input_species else "NOT_ASSESSED",
+                "species": matched_taxon or "",
+                "stage2_status": stage2_status,
+                "stage1_top": s1_top or "",
+                "stage1_family": fam_top or "",
+                "stage1_family_label": fam_label,
+                "stage1_wzx_only": s1.get("top_wzx_only") or "",
+                "ref_id": s2.get("ref_id", ""),
+                "contig": s2.get("contig", ""), "contig_pos": s2.get("contig_pos", ""),
+                "strand": s2.get("strand", ""), "base": s2.get("base", ""),
+                "triplet": s2.get("triplet", ""),
+                "triplet_status": s2.get("triplet_status", ""),
+                "coding_status": s2.get("coding_status", ""),
+                "resolver_loci": _render_loci(s2_ev),
+                "status": status,
+                "family_serotype": family_sero,
+                "final_serotype": final_sero or "",
+                "warnings": ";".join(warnings)}
 
     # Nothing in the panel matched. This used to report the target species
     # anyway, because `species or config["target_species"]` filled the column
@@ -162,7 +109,7 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
     # came back as "Streptococcus suis". Reference metadata is not an
     # identification of the input, and no match is not an identification at all.
     if s1_top is None and not s1.get("top_wzx_only"):
-        return row(NO_CPS_MATCH, matched_taxon=None,
+        return row("NO_CPS_MATCH", matched_taxon=None,
                    warnings=["no_cps_reference_matched"])
 
     # cps genes are present but no reference *wzy* matched. That establishes
@@ -171,7 +118,7 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
     # nearest wzx relative as a lead and say plainly what was not assessed.
     if s1_top is None:
         nearest = s1["top_wzx_only"]
-        return row(NO_WZY_MATCH, matched_taxon=None,
+        return row("NO_WZY_MATCH", matched_taxon=None,
                    warnings=["no_reference_wzy_matched",
                              f"nearest_wzx_relative:cps_type_{nearest}",
                              "locus_integrity_not_assessed"])
@@ -183,23 +130,28 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
     # species level, not just the type level.
     matched_taxon = s1.get("top_species")
     if matched_taxon and matched_taxon != config["target_species"]:
-        return row(NON_TARGET_SPECIES, matched_taxon=matched_taxon,
+        return row("NON_TARGET_SPECIES", matched_taxon=matched_taxon,
                    warnings=[f"cps_type_{s1_top}_belongs_to_{matched_taxon.replace(' ', '_')}"])
 
-    # Family-level confidence, before any within-family resolution.
-    if not fam["decisive"]:
-        detail = f"{fam['top']}/{fam['second']}" if fam["second"] else f"{fam['top']}"
-        warnings.append(f"competing_cps_families:{detail}")
-        warnings.append(f"family_fraction={fam['fraction']:.2f};family_delta={fam['delta']:.0f}")
-        return row(NO_CALL_FAMILY_AMBIGUOUS, matched_taxon=matched_taxon,
+    # Family-level confidence, before any within-family resolution. Ambiguity
+    # inside {1,14} or {2,1/2} is what Stage 2 settles; ambiguity BETWEEN
+    # families is not, and no within-family site can settle it. A Stage-1
+    # result with no family fields was never assessed, so it is not decisive.
+    if not s1.get("family_decisive", False):
+        second = s1.get("family_second")
+        warnings.append(f"competing_cps_families:{fam_top}/{second}" if second
+                        else f"competing_cps_families:{fam_top}")
+        warnings.append(f"family_fraction={s1.get('family_fraction', 0.0):.2f};"
+                        f"family_delta={s1.get('family_delta', 0.0):.0f}")
+        return row("NO_CALL_FAMILY_AMBIGUOUS", matched_taxon=matched_taxon,
                    warnings=warnings)
 
     # A singleton family: the type IS the answer, no within-family site to read.
     # The runner-up is never a fallback into a resolvable family: with top="9"
     # and second="2" the tool used to read the cpsK site and report a
     # confident "2", from a site that only separates 2 from 1/2.
-    if fam["top"] not in RESOLVABLE_FAMILIES:
-        return row(STAGE1, final_sero=fam["top"].removeprefix("type:"),
+    if fam_top not in RESOLVABLE_FAMILIES:
+        return row("STAGE1", final_sero=fam_top.removeprefix("type:"),
                    matched_taxon=matched_taxon, warnings=warnings)
 
     # The FAMILY decision picks the resolver pair, not the top individual
@@ -207,7 +159,7 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
     # contribute a different marker class can out-score the single highest
     # individual type -- and when they do, the family-level evidence is what
     # was actually assessed for confidence. Disagreement is worth recording.
-    allowed_pair = fam["top"]
+    allowed_pair = fam_top
     top_label_pair = pair_of(s1_top, config)
     if top_label_pair and top_label_pair != allowed_pair:
         warnings.append(f"family_disagrees_with_top_label:{allowed_pair}/{top_label_pair}")
@@ -232,17 +184,17 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
     # A Stage-2 call must stay inside the family Stage 1 pointed at.
     if final_sero and allowed_pair and pair_of(final_sero, config) not in (None, allowed_pair):
         warnings.append(f"stage2_outside_stage1_pair:{final_sero}")
-        return row(NO_CALL_PAIR_CONFLICT, s2_ev=s2_ev, matched_taxon=matched_taxon,
-                   warnings=warnings, stage2_status=s2_status, family_sero=fam["label"])
+        return row("NO_CALL_PAIR_CONFLICT", s2_ev=s2_ev, matched_taxon=matched_taxon,
+                   warnings=warnings, stage2_status=s2_status, family_sero=fam_label)
 
     if final_sero:
-        return row(STAGE2, final_sero=final_sero, s2_ev=s2_ev,
+        return row("STAGE2", final_sero=final_sero, s2_ev=s2_ev,
                    matched_taxon=matched_taxon, warnings=warnings, stage2_status=s2_status)
 
     # The family is established even though the exact member is not. Report it
     # rather than throwing the whole result away.
-    return row(FAMILY_ONLY, s2_ev=s2_ev, matched_taxon=matched_taxon,
-               warnings=warnings, stage2_status=s2_status, family_sero=fam["label"])
+    return row("FAMILY_ONLY", s2_ev=s2_ev, matched_taxon=matched_taxon,
+               warnings=warnings, stage2_status=s2_status, family_sero=fam_label)
 
 # -------- CLI --------
 
@@ -379,17 +331,17 @@ def main(assembly, out_dir, merged_csv, threads, species, input_species, config)
                               input_species=input_species)
             merged_rows.append(row)
             fname, status, final = Path(asm).name,row["status"],row["final_serotype"]
-            if status in CALLED_STATUSES: click.echo(f"[OK] {fname} => {final} ({status})")
-            elif status == FAMILY_ONLY:
+            if status in ("STAGE1", "STAGE2"): click.echo(f"[OK] {fname} => {final} ({status})")
+            elif status == "FAMILY_ONLY":
                 click.echo(f"[WARN] {fname} => {row['family_serotype']} "
                            f"(family only; exact resolution withheld: {row['stage2_status']})", err=True)
-            elif status == NO_CPS_MATCH:
+            elif status == "NO_CPS_MATCH":
                 click.echo(f"[WARN] {fname} => no cps reference matched; no species inferred", err=True)
-            elif status == NO_WZY_MATCH:
+            elif status == "NO_WZY_MATCH":
                 click.echo(f"[WARN] {fname} => no reference wzy matched "
                            f"(nearest wzx: cps type {row['stage1_wzx_only']}); "
                            f"locus integrity not assessed", err=True)
-            elif status == NON_TARGET_SPECIES:
+            elif status == "NON_TARGET_SPECIES":
                 click.echo(f"[WARN] {fname} => matched reference is not {config['target_species']}: "
                            f"{row['matched_reference_taxon']} (cps type {row['stage1_top']})", err=True)
             else: click.echo(f"[WARN] {fname} => {status}", err=True)

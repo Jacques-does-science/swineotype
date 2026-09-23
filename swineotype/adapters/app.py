@@ -7,16 +7,11 @@ from pathlib import Path
 from glob import glob
 from typing import Optional, List
 
-import pandas as pd
 import yaml
 import click
 
 from swineotype import __version__
 from swineotype.utils import unique_run_names
-
-# The workflow addresses every staged assembly as {sample}.fasta, so the
-# staged copy has to carry that exact suffix whatever the input was called.
-STAGED_SUFFIX = ".fasta"
 
 
 def log(msg: str):
@@ -38,19 +33,56 @@ def stage_assembly(source: Path, dest: Path) -> None:
     dest.symlink_to(source)
 
 
-def read_swineotype_summary(path: Path) -> pd.DataFrame:
-    """Read the CSV summary `swineotype --species suis` writes.
+def read_swineotype_summary(path: Path) -> tuple[list[str], list[dict]]:
+    """Read the CSV summary `swineotype --species suis` writes: (columns, rows).
 
     It used to be read with ``sep="\\t"``, which does not raise on a CSV:
-    pandas returns one column named after the whole header line, so the
+    pandas returned one column named after the whole header line, so the
     try/except around it never fired and the merge died with
-    ``KeyError("sample")``. An empty file raises EmptyDataError, a ValueError.
+    ``KeyError("sample")``.
     """
-    df = pd.read_csv(path, dtype={"sample": str})
-    if "sample" not in df.columns:
-        raise ValueError(f"{path} has no 'sample' column (found: {list(df.columns)}); "
+    with open(path, newline="") as fh:
+        reader = csv.DictReader(fh)
+        columns = reader.fieldnames  # read while the file is open: it is lazy
+        rows = list(reader)
+    if not columns:
+        raise ValueError(f"{path} is empty; expected a summary written by `swineotype --species suis`")
+    if "sample" not in columns:
+        raise ValueError(f"{path} has no 'sample' column (found: {columns}); "
                          f"expected a summary written by `swineotype --species suis`")
-    return df
+    return list(columns), rows
+
+
+def merge_app_results(summary: Path, app_results: Path) -> None:
+    """Outer-join the APP calls onto the swineotype summary by `sample`, in place.
+
+    serovar.tsv is written by readr::write_tsv in the workflow's R summariser:
+    a real TSV with a known header. A merge is ordered by sample and a fresh
+    summary keeps serovar.tsv's order, as the pandas code this replaces did.
+    Values are copied as text: pandas re-typed any all-numeric column, so an
+    outer join that introduced a blank turned `final_serotype` "2" into "2.0".
+    """
+    with open(app_results, newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        missing = {"Sample", "Suggested_serovar"} - set(reader.fieldnames or ())
+        if missing:
+            raise ValueError(f"{app_results} is missing expected column(s): {sorted(missing)}")
+        calls = {r["Sample"]: r["Suggested_serovar"] for r in reader}
+
+    if summary.exists():
+        columns, rows = read_swineotype_summary(summary)
+        seen = {r["sample"] for r in rows}
+        rows = [{**r, "app_serovar": calls.get(r["sample"], r.get("app_serovar", ""))} for r in rows]
+        rows = sorted(rows + [{"sample": s, "app_serovar": v} for s, v in calls.items() if s not in seen],
+                      key=lambda r: r["sample"])
+    else:
+        columns, rows = ["sample"], [{"sample": s, "app_serovar": v} for s, v in calls.items()]
+    if "app_serovar" not in columns:
+        columns = columns + ["app_serovar"]
+    with open(summary, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype_summary: Optional[str]):
@@ -106,16 +138,11 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
     third_party = Path(__file__).parent.parent.parent / "third_party" / "serovar_detector"
     db_dir = third_party / "db"
     db_prefix = db_dir / "Actinobacillus_pleuropneumoniae"
-    if not (db_prefix.with_suffix(".fasta").exists()
-            and db_prefix.with_suffix(".seq.b").exists()
-            and db_prefix.with_suffix(".comp.b").exists()
-            and db_prefix.with_suffix(".length.b").exists()):
+    if not all(db_prefix.with_suffix(s).exists() for s in (".fasta", ".seq.b", ".comp.b", ".length.b")):
         err(f"Database prefix not found or incomplete: {db_prefix}")
         sys.exit(1)
     log(f"Using KMA DB prefix: {db_prefix}")
 
-    # Paths in config
-    # ...
     serovar_profiles = third_party / "config" / "serovar_profiles.yaml"
     if not serovar_profiles.exists():
         err(f"Missing serovar profiles YAML: {serovar_profiles}")
@@ -153,9 +180,7 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
     }
     with open(config_yaml, "w") as fh:
         yaml.dump(config, fh)
-
-    log("[INFO] Effective config.yaml contents:")
-    print(yaml.dump(config, sort_keys=False))
+    log(f"Workflow config written: {config_yaml}")
 
     # Create symlinks for the assembly files in the tmp directory, which is what
     # the serovar_detector workflow expects.
@@ -165,7 +190,7 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
     for asm_path, name in zip(assemblies, sample_names):
         # `{sample}.fasta`, always: the workflow's input pattern is literal, so
         # staging a .fa or .fna under its own name left the rule with no input.
-        stage_assembly(asm_path, assembly_tmp_dir / f"{name}{STAGED_SUFFIX}")
+        stage_assembly(asm_path, assembly_tmp_dir / f"{name}.fasta")
 
 
     # Run Snakemake
@@ -190,51 +215,13 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
         err(f"APP serovar results not found: {app_results}")
         sys.exit(1)
 
-    # Optional merge with swineotype summary
-    # Optional merge with swineotype summary or just output to CSV
+    # Optional merge with the swineotype summary
     if swineotype_summary:
         swineo = Path(swineotype_summary).resolve()
-        
-        # serovar.tsv is written by readr::write_tsv in the workflow's R
-        # summariser: a real TSV, with a known header.
-        app_df = pd.read_csv(app_results, sep="\t", dtype=str)
-        missing = {"Sample", "Suggested_serovar"} - set(app_df.columns)
-        if missing:
-            err(f"{app_results} is missing expected column(s): {sorted(missing)}")
+        log(f"Merging APP results into {swineo}")
+        try:
+            merge_app_results(swineo, app_results)
+        except ValueError as exc:
+            err(str(exc))
             sys.exit(1)
-        app_clean = app_df.rename(
-            columns={"Sample": "sample", "Suggested_serovar": "app_serovar"}
-        )[["sample", "app_serovar"]]
-
-        if swineo.exists():
-            log(f"Merging APP results with existing summary → {swineo}")
-            try:
-                suis_df = read_swineotype_summary(swineo)
-            except ValueError as exc:
-                err(str(exc))
-                sys.exit(1)
-
-            merged = suis_df.merge(app_clean, on="sample", how="outer")
-            merged.to_csv(swineo, index=False)
-            log(f"[SUCCESS] Updated summary written → {swineo}")
-        else:
-            log(f"Writing APP results to new summary → {swineo}")
-            app_clean.to_csv(swineo, index=False)
-            log(f"[SUCCESS] Summary written → {swineo}")
-
-@click.command()
-@click.option("--assembly", multiple=True, required=True, help="Path to one or more assembly files or glob patterns.")
-@click.option("--out_dir", required=True, help="Output directory base")
-@click.option("--threads", type=int, default=4, help="Threads for Snakemake/KMA")
-@click.option("--swineotype_summary", help="Path to swineotype summary TSV/CSV to merge with APP results")
-def main(assembly, out_dir, threads, swineotype_summary):
-    """Adapter for APP serovar detection + merge with swineotype"""
-    run_app_analysis(
-        assembly=list(assembly),
-        out_dir=out_dir,
-        threads=threads,
-        swineotype_summary=swineotype_summary
-    )
-
-if __name__ == "__main__":
-    main()
+        log(f"[SUCCESS] Summary written \u2192 {swineo}")

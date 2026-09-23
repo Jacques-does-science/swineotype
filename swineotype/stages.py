@@ -6,7 +6,7 @@ from pathlib import Path
 
 from swineotype.blast import run_blast, make_db_if_needed
 
-from swineotype.utils import ensure_tool, gzip_file
+from swineotype.utils import gzip_file
 
 # Stage-2 needs the aligned sequences so the diagnostic codon can be read out
 # of the alignment itself rather than by arithmetic on start coordinates.
@@ -25,29 +25,6 @@ STOP_CODONS = frozenset({"TAA", "TAG", "TGA"})
 TRP_CODONS = frozenset({"TGG"})
 CYS_CODONS = frozenset({"TGT", "TGC"})
 RESOLVABLE_CODONS = TRP_CODONS | CYS_CODONS
-
-# Triplet read-out states.
-TRIPLET_OK = "OK"                        # complete, contiguous, TGG/TGC/TGT
-TRIPLET_UNEXPECTED = "UNEXPECTED_CODON"  # complete and contiguous, but not one of those
-TRIPLET_AMBIGUOUS = "AMBIGUOUS"          # contains a non-ACGT character
-TRIPLET_DELETED = "DELETED"              # subject carries a deletion in the codon
-TRIPLET_INCOMPLETE = "INCOMPLETE"        # alignment does not reach all three positions
-TRIPLET_NONCONTIGUOUS = "NON_CONTIGUOUS" # subject insertion inside the codon
-
-# Coding-sequence integrity states. UNASSESSED is not a synonym for intact:
-# it means the alignment did not carry enough of the gene to judge.
-CODING_INTACT = "INTACT"
-CODING_DISRUPTED = "DISRUPTED"
-CODING_UNASSESSED = "UNASSESSED"
-
-# Stage-2 outcomes.
-S2_SKIPPED = "SKIPPED"
-S2_NO_HSP = "NO_HSP_OR_LOW_QUAL"
-S2_OK = "OK"
-S2_CONFLICT = "CONFLICTING_COPIES"
-S2_INVALID = "INVALID_TRIPLET"
-S2_CODING_DISRUPTED = "CODING_DISRUPTED"
-
 
 def header_tag(header: str, key: str) -> str | None:
     """Value of a `[key=value]` tag in a FASTA header, or None.
@@ -245,7 +222,6 @@ def family_label(family: str | None, config: dict) -> str:
 
 
 def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Path, config: dict):
-    ensure_tool("blastn"); ensure_tool("makeblastdb")
     allele_to_type, allele_to_geneclass, type_to_species = parse_whitelist_headers(whitelist_fa)
     db_prefix = make_db_if_needed(assembly_fa, config["tmp_dir"])
     tsv_text = run_blast(whitelist_fa, db_prefix, threads, STAGE1_OUTFMT)
@@ -375,7 +351,7 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
 # Stage 2: gap-aware read-out of the diagnostic codon
 # ---------------------------------------------------------------------------
 
-def alignment_columns(qseq: str, sseq: str, qstart: int, sstart: int, send: int):
+def alignment_columns(qseq: str, sseq: str, qstart: int, sstart: int = 1, send: int = 1):
     """Walk a gapped HSP, yielding (qpos, spos, qchar, schar) per column.
 
     ``qpos``/``spos`` are None in the column where that sequence carries a gap.
@@ -407,8 +383,15 @@ def triplet_at_query_pos(qseq: str, sseq: str, qstart: int, sstart: int, send: i
     single upstream indel -- the characteristic ONT error -- shifted the
     read-out by one base, enough to flip a serotype call.
 
-    Returns the read-out plus the subject coordinate of each base and a status
-    naming exactly why it is or is not interpretable.
+    Returns the read-out plus the subject coordinate of each base and a
+    ``triplet_status`` naming exactly why it is or is not interpretable:
+
+      OK                complete, contiguous, and TGG/TGC/TGT
+      UNEXPECTED_CODON  complete and contiguous, but not one of those
+      AMBIGUOUS         contains a non-ACGT character
+      DELETED           the subject carries a deletion in the codon
+      INCOMPLETE        the alignment does not reach all three positions
+      NON_CONTIGUOUS    a subject insertion sits inside the codon
     """
     strand = "+" if sstart <= send else "-"
     sstep = 1 if strand == "+" else -1
@@ -429,22 +412,22 @@ def triplet_at_query_pos(qseq: str, sseq: str, qstart: int, sstart: int, send: i
               "contig_pos": positions[2], "base": chars[2]}
 
     if "?" in chars:
-        result["triplet_status"] = TRIPLET_INCOMPLETE
+        result["triplet_status"] = "INCOMPLETE"
         return result
     if "-" in chars:
-        result["triplet_status"] = TRIPLET_DELETED
+        result["triplet_status"] = "DELETED"
         return result
     if any(c not in DNA for c in chars):
-        result["triplet_status"] = TRIPLET_AMBIGUOUS
+        result["triplet_status"] = "AMBIGUOUS"
         return result
     # Contiguity: the three subject bases must be adjacent, in the strand's
     # direction. A gap in the query between them means the subject carries an
     # insertion inside the codon, so these three bases are not a codon of the
     # subject's own gene even though each aligns to the right query position.
     if any(positions[i + 1] - positions[i] != sstep for i in range(2)):
-        result["triplet_status"] = TRIPLET_NONCONTIGUOUS
+        result["triplet_status"] = "NON_CONTIGUOUS"
         return result
-    result["triplet_status"] = TRIPLET_OK if triplet in RESOLVABLE_CODONS else TRIPLET_UNEXPECTED
+    result["triplet_status"] = "OK" if triplet in RESOLVABLE_CODONS else "UNEXPECTED_CODON"
     return result
 
 
@@ -464,21 +447,15 @@ def assess_coding_integrity(qseq: str, sseq: str, qstart: int, qend: int, qlen: 
     The reference is a complete CDS starting at query position 1, so query
     position p sits in codon ceil(p/3).
     """
-    insertions = sum(1 for qc in qseq if qc == "-")
-    deletions = sum(1 for sc in sseq if sc == "-")
+    insertions, deletions = qseq.count("-"), sseq.count("-")
     reasons = []
     if (insertions - deletions) % 3:
         reasons.append(f"frameshift:indel_balance={insertions - deletions}")
 
     # Project the subject onto query coordinates (insertion columns dropped),
     # then read complete codons of the reference frame.
-    projected: dict[int, str] = {}
-    qpos = qstart
-    for qchar, schar in zip(qseq, sseq):
-        if qchar == "-":
-            continue
-        projected[qpos] = "-" if schar == "-" else schar.upper()
-        qpos += 1
+    projected = {qpos: schar.upper() for qpos, _, _, schar
+                 in alignment_columns(qseq, sseq, qstart) if qpos is not None}
 
     # Every codon before the reference's own stop codon (codon qlen // 3).
     premature = next((i for i in range(1, qlen // 3)
@@ -489,11 +466,11 @@ def assess_coding_integrity(qseq: str, sseq: str, qstart: int, qend: int, qlen: 
 
     spans_cds = min(qstart, qend) <= 1 and max(qstart, qend) >= qlen
     if reasons:
-        status = CODING_DISRUPTED
+        status = "DISRUPTED"
     elif spans_cds:
-        status = CODING_INTACT
+        status = "INTACT"
     else:
-        status = CODING_UNASSESSED
+        status = "UNASSESSED"
         reasons.append(f"alignment_covers_query_{min(qstart, qend)}-{max(qstart, qend)}_of_{qlen}")
 
     return {"coding_status": status, "coding_detail": ";".join(reasons)}
@@ -502,7 +479,7 @@ def assess_coding_integrity(qseq: str, sseq: str, qstart: int, qend: int, qlen: 
 # A codon that was fully recovered: all three bases present, contiguous and
 # unambiguous. Only these can disagree with one another -- a locus whose codon
 # could not be read says nothing about whether it agrees.
-DETERMINED_TRIPLET_STATES = frozenset({TRIPLET_OK, TRIPLET_UNEXPECTED})
+DETERMINED_TRIPLET_STATES = frozenset({"OK", "UNEXPECTED_CODON"})
 
 
 def codon_was_read(ev: dict) -> bool:
@@ -550,7 +527,7 @@ def collapse_to_loci(evidence: list[dict]) -> list[dict]:
 
 def implied_serotype(ev: dict) -> str | None:
     """The serotype one locus's evidence implies, or None if it implies none."""
-    if ev.get("triplet_status") != TRIPLET_OK:
+    if ev.get("triplet_status") != "OK":
         return None
     meta = parse_resolver_meta(ev["ref_id"])
     triplet = ev["triplet"]
@@ -571,7 +548,6 @@ def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, 
     HSP -- what this used to do -- silently picked a winner when two real copies
     of cpsK disagreed.
     """
-    ensure_tool("blastn"); ensure_tool("makeblastdb")
     db_prefix = make_db_if_needed(assembly_fa, config["tmp_dir"])
     tsv_text = run_blast(resolver_refs_fa, db_prefix, threads, RESOLVER_OUTFMT)
 
@@ -636,14 +612,14 @@ def stage2_resolver_call(assembly_fa: str, resolver_refs_fa: str, threads: int, 
 def resolver_status(ev: dict | None) -> str:
     """The Stage-2 outcome, as reported in the summary."""
     if ev is None:
-        return S2_NO_HSP
+        return "NO_HSP_OR_LOW_QUAL"
     if ev.get("conflict"):
-        return S2_CONFLICT
-    if ev.get("triplet_status") != TRIPLET_OK:
-        return S2_INVALID
-    if ev.get("coding_status") == CODING_DISRUPTED:
-        return S2_CODING_DISRUPTED
-    return S2_OK
+        return "CONFLICTING_COPIES"
+    if ev.get("triplet_status") != "OK":
+        return "INVALID_TRIPLET"
+    if ev.get("coding_status") == "DISRUPTED":
+        return "CODING_DISRUPTED"
+    return "OK"
 
 
 def interpret_resolver(ev: dict | None, config: dict) -> str | None:
@@ -653,7 +629,7 @@ def interpret_resolver(ev: dict | None, config: dict) -> str | None:
     complete contiguous documented codon, no detected coding disruption --
     supports an exact call. The caller still reports the family otherwise.
     """
-    return implied_serotype(ev) if resolver_status(ev) == S2_OK else None
+    return implied_serotype(ev) if resolver_status(ev) == "OK" else None
 
 
 def parse_resolver_meta(qid: str):

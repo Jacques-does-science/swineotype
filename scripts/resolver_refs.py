@@ -8,14 +8,14 @@ the deletion sat between the start codon and the diagnostic site -- left the
 declared diagnostic position pointing at the right base only by accident.
 
 Everything this script needs in order to *verify* the shipped file is pinned in
-``data/suis_resolver_refs.manifest.json``: accession.version, source
+``swineotype/data/suis_resolver_refs.manifest.json``: accession.version, source
 coordinates, strand, diagnostic position and the SHA-256 of the normalized
 sequence. ``check`` is therefore fully offline; only ``regenerate`` touches
 the network, and it is never run by the test suite.
 
 Commands
 --------
-  check       verify data/suis_resolver_refs.fasta against the manifest
+  check       verify swineotype/data/suis_resolver_refs.fasta against the manifest
   regenerate  re-extract from ENA and rewrite the FASTA (network; opt-in)
 
 Normalized sequence
@@ -32,9 +32,9 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-FASTA_PATH = REPO_ROOT / "data" / "suis_resolver_refs.fasta"
-MANIFEST_PATH = REPO_ROOT / "data" / "suis_resolver_refs.manifest.json"
+DATA_DIR = Path(__file__).resolve().parent.parent / "swineotype" / "data"
+FASTA_PATH = DATA_DIR / "suis_resolver_refs.fasta"
+MANIFEST_PATH = DATA_DIR / "suis_resolver_refs.manifest.json"
 
 ENA_URL = "https://www.ebi.ac.uk/ena/browser/api/embl/{accession}?download=false"
 

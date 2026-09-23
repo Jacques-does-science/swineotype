@@ -1,16 +1,15 @@
-"""APP adapter: identities, staged filenames, and reading the suis summary."""
+"""APP adapter: identities, staged filenames, and merging with the suis summary."""
 import csv
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
-from swineotype.adapters.app import STAGED_SUFFIX, read_swineotype_summary, stage_assembly
+from swineotype.adapters.app import merge_app_results, read_swineotype_summary, stage_assembly
 from swineotype.main import SUMMARY_COLUMNS
 from swineotype.utils import unique_run_names
 
 
-# --- reading the swineotype summary ------------------------------------
+# --- the swineotype summary, and merging APP calls into it --------------
 
 def write_summary(path: Path, rows):
     with path.open("w", newline="") as fh:
@@ -20,6 +19,21 @@ def write_summary(path: Path, rows):
             writer.writerow({**{c: "" for c in SUMMARY_COLUMNS}, **r})
 
 
+def write_serovar_tsv(path: Path, calls):
+    """serovar.tsv as the workflow's R summariser writes it (readr::write_tsv)."""
+    with path.open("w", newline="") as fh:
+        writer = csv.writer(fh, delimiter="\t")
+        writer.writerow(["Sample", "Date", "Suggested_serovar", "Template_Gene"])
+        for sample, serovar in calls:
+            writer.writerow([sample, "2026-09-23", serovar, "cps"])
+    return path
+
+
+def read_rows(path: Path):
+    with path.open(newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
 def test_a_csv_summary_is_read_as_csv(tmp_path):
     """Regression: `pd.read_csv(path, sep="\\t")` on a CSV does not raise -- it
     returns one column whose name is the whole header line. The try/except
@@ -27,23 +41,58 @@ def test_a_csv_summary_is_read_as_csv(tmp_path):
     p = tmp_path / "summary.csv"
     write_summary(p, [{"sample": "iso1", "final_serotype": "2"}])
 
-    df = read_swineotype_summary(p)
+    columns, rows = read_swineotype_summary(p)
 
-    assert "sample" in df.columns, "the merge key must survive the read"
-    assert df.loc[0, "sample"] == "iso1"
-    assert len(df.columns) == len(SUMMARY_COLUMNS)
+    assert "sample" in columns, "the merge key must survive the read"
+    assert columns == SUMMARY_COLUMNS
+    assert rows[0]["sample"] == "iso1"
 
 
-def test_merging_on_sample_works_after_the_fix(tmp_path):
-    """The failure this actually caused, end to end."""
-    p = tmp_path / "summary.csv"
-    write_summary(p, [{"sample": "iso1"}, {"sample": "iso2"}])
-    app = pd.DataFrame({"sample": ["iso1", "iso3"], "app_serovar": ["APP_5", "APP_7"]})
+def test_app_calls_are_outer_joined_onto_the_summary(tmp_path):
+    """The failure this actually caused, end to end through the adapter."""
+    summary = tmp_path / "summary.csv"
+    write_summary(summary, [{"sample": "iso1", "final_serotype": "2"},
+                            {"sample": "iso2", "final_serotype": "1/2"}])
+    tsv = write_serovar_tsv(tmp_path / "serovar.tsv", [("iso1", "APP_5"), ("iso3", "APP_7")])
 
-    merged = read_swineotype_summary(p).merge(app, on="sample", how="outer")
+    merge_app_results(summary, tsv)
 
-    assert set(merged["sample"]) == {"iso1", "iso2", "iso3"}
-    assert merged.set_index("sample").loc["iso1", "app_serovar"] == "APP_5"
+    rows = read_rows(summary)
+    assert [r["sample"] for r in rows] == ["iso1", "iso2", "iso3"], "ordered by sample"
+    assert {r["sample"]: r["app_serovar"] for r in rows} == \
+        {"iso1": "APP_5", "iso2": "", "iso3": "APP_7"}
+    assert list(rows[0]) == SUMMARY_COLUMNS + ["app_serovar"]
+
+
+def test_merging_keeps_serotypes_as_text(tmp_path):
+    """Regression: the pandas merge re-typed all-numeric columns, so an outer
+    join that introduced a blank row turned final_serotype "2" into "2.0"."""
+    summary = tmp_path / "summary.csv"
+    write_summary(summary, [{"sample": "iso1", "final_serotype": "2"},
+                            {"sample": "iso2", "final_serotype": "14"}])
+    tsv = write_serovar_tsv(tmp_path / "serovar.tsv", [("app_only", "APP_7")])
+
+    merge_app_results(summary, tsv)
+
+    finals = {r["sample"]: r["final_serotype"] for r in read_rows(summary)}
+    assert finals == {"app_only": "", "iso1": "2", "iso2": "14"}
+
+
+def test_without_a_summary_the_app_calls_are_written_in_their_own_order(tmp_path):
+    summary = tmp_path / "summary.csv"
+    tsv = write_serovar_tsv(tmp_path / "serovar.tsv", [("iso9", "APP_1"), ("iso2", "APP_3")])
+
+    merge_app_results(summary, tsv)
+
+    assert [(r["sample"], r["app_serovar"]) for r in read_rows(summary)] == \
+        [("iso9", "APP_1"), ("iso2", "APP_3")]
+
+
+def test_a_serovar_tsv_missing_its_columns_is_rejected(tmp_path):
+    tsv = tmp_path / "serovar.tsv"
+    tsv.write_text("Sample\tDate\niso1\t2026-09-23\n")
+    with pytest.raises(ValueError, match="Suggested_serovar"):
+        merge_app_results(tmp_path / "summary.csv", tsv)
 
 
 def test_a_file_without_a_sample_column_is_rejected_by_name(tmp_path):
@@ -56,16 +105,21 @@ def test_a_file_without_a_sample_column_is_rejected_by_name(tmp_path):
 def test_an_empty_summary_is_rejected(tmp_path):
     p = tmp_path / "empty.csv"
     p.write_text("")
-    with pytest.raises(ValueError):  # pandas' EmptyDataError
+    with pytest.raises(ValueError, match="empty"):
         read_swineotype_summary(p)
 
 
 def test_numeric_looking_sample_names_stay_strings(tmp_path):
-    """A merge key that pandas reads as int64 on one side and object on the
-    other silently matches nothing."""
-    p = tmp_path / "summary.csv"
-    write_summary(p, [{"sample": "0012"}])
-    assert read_swineotype_summary(p).loc[0, "sample"] == "0012"
+    """A merge key read as int64 on one side and text on the other matches
+    nothing; "0012" and "12" are different samples."""
+    summary = tmp_path / "summary.csv"
+    write_summary(summary, [{"sample": "0012"}, {"sample": "12"}])
+    tsv = write_serovar_tsv(tmp_path / "serovar.tsv", [("0012", "APP_2")])
+
+    merge_app_results(summary, tsv)
+
+    assert {r["sample"]: r["app_serovar"] for r in read_rows(summary)} == \
+        {"0012": "APP_2", "12": ""}
 
 
 # --- sample identity ---------------------------------------------------
@@ -136,12 +190,6 @@ def test_staging_is_idempotent(tmp_path):
     assert dest.resolve() == src.resolve()
 
 
-def test_staged_name_always_carries_the_fasta_suffix():
-    """The workflow's input pattern is the literal `{sample}.fasta`, so a .fa
-    or .fna staged under its own name left the rule with no input at all."""
-    assert STAGED_SUFFIX == ".fasta"
-
-
 def test_staged_filenames_are_normalised(tmp_path, monkeypatch):
     """End to end through the adapter's staging step, for .fa / .fna inputs."""
     from swineotype.adapters import app as app_mod
@@ -153,7 +201,7 @@ def test_staged_filenames_are_normalised(tmp_path, monkeypatch):
 
     names = unique_run_names(inputs)
     for src, name in zip(inputs, names):
-        app_mod.stage_assembly(src, staged_dir / f"{name}{app_mod.STAGED_SUFFIX}")
+        app_mod.stage_assembly(src, staged_dir / f"{name}.fasta")
 
     assert sorted(p.name for p in staged_dir.iterdir()) == \
         ["iso1.fasta", "iso2.fasta", "iso3.fasta"]
@@ -167,7 +215,7 @@ def test_sample_sheet_names_match_the_staged_filenames(tmp_path):
         p.parent.mkdir(); p.write_text(">c\nACGT\n")
 
     names = unique_run_names(inputs)
-    staged = [f"{n}{STAGED_SUFFIX}" for n in names]
+    staged = [f"{n}.fasta" for n in names]
 
     assert [Path(s).stem for s in staged] == names
     assert len(set(staged)) == 2

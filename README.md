@@ -104,7 +104,7 @@ The two groups declare different positions for the same residue because the 1/14
 
 #### Resolver reference provenance
 
-Each of the four resolver references is a verbatim slice of a public record. Accession**.version**, source coordinates, strand, diagnostic position, the SHA-256 of the normalized sequence and the extraction method are pinned in [`data/suis_resolver_refs.manifest.json`](data/suis_resolver_refs.manifest.json).
+Each of the four resolver references is a verbatim slice of a public record. Accession**.version**, source coordinates, strand, diagnostic position, the SHA-256 of the normalized sequence and the extraction method are pinned in [`swineotype/data/suis_resolver_refs.manifest.json`](swineotype/data/suis_resolver_refs.manifest.json).
 
 | Reference | Source | Coordinates (1-based, inclusive) | Strand | Length | Diagnostic position | Codon |
 | :--- | :--- | :--- | :--- | ---: | ---: | :--- |

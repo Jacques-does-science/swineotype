@@ -1,4 +1,4 @@
-"""Invariants over the real data/ files -- no mocks, no network.
+"""Invariants over the shipped reference files -- no mocks, no network.
 
 The cpsK polarity was inverted across three commits (#14 -> #15 -> #16) and
 ended up correct with nothing locking it in; the one test that touched it was

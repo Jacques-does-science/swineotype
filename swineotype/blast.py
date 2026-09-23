@@ -1,13 +1,9 @@
 import hashlib
-import shlex
 import subprocess
 from pathlib import Path
 
-def run(cmd, check=True, capture=True, cwd=None, text=True):
-    if isinstance(cmd, str):
-        cmd = shlex.split(cmd)
-    res = subprocess.run(cmd, check=check, capture_output=capture, cwd=cwd, text=text)
-    return res.stdout
+def run(cmd: list[str]) -> str:
+    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
 
 def content_digest(path, length: int = 12) -> str:
     """Short SHA-1 of a file's bytes, used to key caches by content."""
