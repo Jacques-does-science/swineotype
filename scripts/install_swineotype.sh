@@ -29,7 +29,7 @@ echo "==> Installing dependencies into $ENV_NAME"
 # base with `samtools faidx`, but it now reads it out of the BLAST alignment
 # directly. Neither is referenced by swineotype or by serovar_detector.
 # pandas, snakemake, kma and peppy serve the APP workflow; swineotype itself
-# needs only click and PyYAML, which setup.py declares.
+# needs only click and PyYAML, which pyproject.toml declares.
 conda install -n "$ENV_NAME" -c conda-forge -c bioconda \
     blast \
     pandas \
