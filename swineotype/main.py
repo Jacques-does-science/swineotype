@@ -141,8 +141,8 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
         second = s1.get("family_second")
         warnings.append(f"competing_cps_families:{fam_top}/{second}" if second
                         else f"competing_cps_families:{fam_top}")
-        warnings.append(f"family_fraction={s1.get('family_fraction', 0.0):.2f};"
-                        f"family_delta={s1.get('family_delta', 0.0):.0f}")
+        warnings.append(f"family_fraction={s1.get('family_fraction', 0.0):.2f}")
+        warnings.append(f"family_delta={s1.get('family_delta', 0.0):.0f}")
         return row("NO_CALL_FAMILY_AMBIGUOUS", matched_taxon=matched_taxon,
                    warnings=warnings)
 
@@ -286,7 +286,7 @@ def write_summary_csv(path: Path, rows: list[dict], append: bool) -> None:
 @click.option("--assembly", multiple=True, required=True, type=click.Path(), help="Path to one or more assembly files. Globs are supported.")
 @click.option("--out_dir", required=True, type=click.Path(), help="Output directory")
 @click.option("--merged_csv", default=None, type=click.Path(), help="Additional CSV to append all results to. A per-run summary is always written to the output directory regardless.")
-@click.option("--threads", default=lambda: max(1, os.cpu_count() // 2), help="Number of threads to use")
+@click.option("--threads", type=int, default=lambda: max(1, os.cpu_count() // 2), show_default="half the CPUs", help="Number of threads to use")
 @click.option("--species", default="suis", type=click.Choice(["suis", "app"]), help="Species to serotype")
 @click.option("--input_species", default=None, help="Independently established species of the input (e.g. from ANI). Recorded as-is; this tool does not measure it.")
 @click.option("--config", default=None, type=click.Path(exists=True), help="Path to a custom config.yaml file")

@@ -473,7 +473,8 @@ def assess_coding_integrity(qseq: str, sseq: str, qstart: int, qend: int, qlen: 
         status = "UNASSESSED"
         reasons.append(f"alignment_covers_query_{min(qstart, qend)}-{max(qstart, qend)}_of_{qlen}")
 
-    return {"coding_status": status, "coding_detail": ";".join(reasons)}
+    # Comma-joined: this detail is embedded in the ';'-separated warnings column.
+    return {"coding_status": status, "coding_detail": ",".join(reasons)}
 
 
 # A codon that was fully recovered: all three bases present, contiguous and
