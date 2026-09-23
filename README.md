@@ -98,8 +98,8 @@ Serotyping assemblies
 [OK] GCA_000014305.1_ASM1430v1_genomic.fasta => 2 (STAGE2)
 [OK] GCA_000014325.1_ASM1432v1_genomic.fasta => 2 (STAGE2)
 [OK] GCA_000018185.1_ASM1818v1_genomic.fasta => 2 (STAGE2)
-[INFO] Summary written: results_example/swineotype_summary.csv
-[INFO] Run record written: results_example/swineotype_run.json
+[INFO] Summary written: /path/to/swineotype/results_example/swineotype_summary.csv
+[INFO] Run record written: /path/to/swineotype/results_example/swineotype_run.json
 ```
 
 `STAGE2` means the capsule genes placed each genome in the 2 / 1/2 family, and the codon

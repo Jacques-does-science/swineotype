@@ -42,9 +42,10 @@ results/
 *.csv
 *.json
 
-# ...except the reference data the package ships
+# ...except the reference data the package ships, and the example genomes
 !/swineotype/data/*.fasta
 !/swineotype/data/*.json
+!/examples/*/*.fasta
 
 # the old install-tree data dir, and the per-run cache (staged assemblies + BLAST databases)
 /data/
