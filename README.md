@@ -23,6 +23,7 @@ which settings and reference data produced it.
 ## Contents
 
 - [Installation](#installation)
+- [Updating](#updating)
 - [Quick start](#quick-start)
 - [Usage](#usage)
 - [How it works: *S. suis*](#how-it-works-s-suis)
@@ -87,6 +88,67 @@ pip install ./third_party/serovar_detector
 The first APP run builds those environments (about 2.3 GB, stored inside the
 serovar_detector installation), which takes several minutes and needs internet access once.
 Later runs reuse them.
+
+---
+
+## Updating
+
+To bring an existing installation up to the newest swineotype, for both the *S. suis*
+analysis and APP, run these from the repository folder.
+
+**1. Get the newest code.** This updates swineotype, its reference data and the bundled
+serovar_detector release:
+
+```bash
+git pull
+```
+
+```bash
+git submodule sync --recursive
+```
+
+```bash
+git submodule update --init --recursive --force
+```
+
+`git submodule sync` follows the submodule if its source has moved. `--force` discards any
+local edits inside `third_party/serovar_detector`, which would otherwise stop the update;
+nothing elsewhere in the repository is touched. If you have edited swineotype's own files,
+`git pull` may ask you to commit or stash those edits first.
+
+**2. Rebuild the environment:**
+
+```bash
+bash scripts/install_swineotype.sh
+```
+
+This replaces the `swineotype` environment with a new one, without asking, and installs
+the current swineotype and serovar_detector into it together with the tools they need. The
+first APP run afterwards takes several minutes while serovar_detector rebuilds its own
+environments.
+
+To keep your existing environment instead, reinstall the two packages into it. This is
+quicker, but it will not add any new tool that a release needs:
+
+```bash
+conda run -n swineotype pip install -e .
+```
+
+```bash
+conda run -n swineotype pip install ./third_party/serovar_detector
+```
+
+With a pip-only installation, run `pip install .` and
+`pip install ./third_party/serovar_detector` in that environment instead.
+
+**3. Check the update.** Run the two [Quick start](#quick-start) examples. The *S. suis*
+genomes should come out as serotype 2 and the APP genomes as S1, S4 and S3, and the APP run
+prints the serovar_detector version it used.
+
+Updating does not change results you already have. Re-run your assemblies to get calls
+from the new version, into a new `--out_dir`. If you keep a `--merged_csv` table, start a
+new one too: swineotype refuses to append to a table whose columns differ from the current
+ones.
 
 ---
 
