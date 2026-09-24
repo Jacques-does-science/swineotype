@@ -6,8 +6,9 @@
 ***Streptococcus suis*** and the serovar of ***Actinobacillus pleuropneumoniae*** (APP).
 For *S. suis* it compares each assembly against a curated panel of capsule genes and,
 where two serotypes share the same capsule locus, reads the single codon that tells
-them apart. For APP it runs the established
-[serovar_detector](https://github.com/Jacques-does-science/serovar_detector) workflow.
+them apart. For APP it runs
+[serovar_detector](https://github.com/KasperThystrup/serovar_detector) by Kasper Thystrup
+Karstensen, which is bundled unmodified, and can add its calls to the same table.
 Every run produces one summary table with a row per assembly, plus a record of exactly
 which settings and reference data produced it.
 
@@ -15,9 +16,9 @@ which settings and reference data produced it.
 | :--- | :--- |
 | **Input** | Assembled genomes, uncompressed FASTA — one file per isolate, draft or complete |
 | ***S. suis*** | All 29 serotypes (1–19, 21, 23–25, 27–31 and 1/2), by BLAST against *wzx*/*wzy* capsule genes, with a codon-level resolver for 1 vs 14 and 2 vs 1/2 |
-| **APP** | Serovars 1–19, by KMA against capsule genes, via a bundled Snakemake workflow |
+| **APP** | Serovars 1–19, by [serovar_detector](https://github.com/KasperThystrup/serovar_detector) v1.1.2 (BLAST against capsule genes), bundled unmodified |
 | **Output** | `swineotype_summary.csv` (one row per isolate) and `swineotype_run.json` (versions, settings, reference checksums) |
-| **Requires** | Python ≥ 3.10 and BLAST+; the APP workflow additionally needs Snakemake, conda and KMA |
+| **Requires** | Python ≥ 3.10 and BLAST+; APP additionally needs conda, Snakemake and serovar_detector, installed from the bundled submodule |
 
 ## Contents
 
@@ -39,8 +40,8 @@ which settings and reference data produced it.
 
 You need `git` and conda (Miniconda, Anaconda or Mamba).
 
-**1. Clone the repository with its submodule.** The APP workflow lives in a git
-submodule, so `--recursive` matters:
+**1. Clone the repository with its submodule.** serovar_detector, which does the APP
+typing, is included as a git submodule, so `--recursive` matters:
 
 ```bash
 git clone --recursive https://github.com/Jacques-does-science/swineotype.git
@@ -50,8 +51,8 @@ If you already cloned without it, run `git submodule update --init --recursive` 
 the repository.
 
 **2. Create the environment.** From the repository root, this creates a conda environment
-called `swineotype` (Python 3.11, BLAST+, Snakemake, KMA and supporting packages) and
-installs the tool into it:
+called `swineotype` (Python 3.11, BLAST+, Snakemake and supporting packages) and installs
+swineotype and serovar_detector into it:
 
 ```bash
 bash scripts/install_swineotype.sh
@@ -76,11 +77,16 @@ on the `PATH` is enough:
 pip install .
 ```
 
-APP serotyping needs the full repository checkout — the workflow and its KMA database
-are inside `third_party/serovar_detector` — so for APP, use the conda route above, or
-`pip install -e .` from the checkout with Snakemake, conda and KMA available. The first
-APP run lets Snakemake build the workflow's own conda environments, which needs internet
-access once.
+For APP, also install serovar_detector from the checkout's submodule. It needs conda on
+the `PATH`, because its workflow builds its own BLAST and R environments:
+
+```bash
+pip install ./third_party/serovar_detector
+```
+
+The first APP run builds those environments (about 2.3 GB, stored inside the
+serovar_detector installation), which takes several minutes and needs internet access once.
+Later runs reuse them.
 
 ---
 
@@ -112,7 +118,33 @@ information, with the evidence behind it, is in the summary table:
 | GCA_000014325.1_ASM1432v1_genomic | STAGE2 | 2 | 2_vs_1_2 | TGG | OK | INTACT |
 | GCA_000018185.1_ASM1818v1_genomic | STAGE2 | 2 | 2_vs_1_2 | TGG | OK | INTACT |
 
-Three complete APP genomes are also included, in `examples/Actinobacillus/`.
+Three complete APP genomes are included too: the reference strains of serovars 1 (S4074),
+4 (M62) and 3 (S1421). The first APP run takes several minutes longer while serovar_detector
+builds its environments:
+
+```bash
+swineotype --species app --assembly "examples/Actinobacillus/*.fasta" --out_dir results_example
+```
+
+swineotype's own lines of the output (serovar_detector's progress messages, printed in
+between, are left out here):
+
+```text
+[INFO] Found 3 assemblies
+[INFO] APP serovars are called by serovar_detector 1.1.2 (Kasper Thystrup Karstensen). If you use them, please cite: Angen Ø, Karstensen KT, Vilaró A, et al. (2025) …
+[OK] CP030753.1 => S1 (serovar_detector)
+[OK] CP031873.1 => S4 (serovar_detector)
+[OK] CP031874.1 => S3 (serovar_detector)
+[INFO] APP serovar table: /path/to/swineotype/results_example/app_detector/serovars.tsv
+```
+
+serovar_detector's table also lists the capsule genes behind each call:
+
+| Sample | Suggested_serovar | Frequency | Serovar_match |
+| :--- | :--- | :--- | :--- |
+| CP030753.1 | S1 | 4 of 4 | cps1A, cps1B, cps1C, cps1D |
+| CP031873.1 | S4 | 3 of 3 | cps4A, cps4B, cps4C |
+| CP031874.1 | S3 | 7 of 7 | cps3A, cps3B, cps3C, cps3D (99.8371335504886% ID, 99.8371335504886% COV), cps3E, cps3F, cps3G |
 
 ---
 
@@ -131,7 +163,7 @@ swineotype --species app --assembly "isolates/*.fasta" --out_dir results --threa
 | `--assembly` | Assembly FASTA file(s). Required. **Quote glob patterns** (`"isolates/*.fasta"`) so swineotype expands them — an unquoted glob is expanded by the shell into extra arguments, which is an error. Repeat the option to pass several files or patterns. A pattern that matches nothing stops the run with exit code 2. |
 | `--out_dir` | Output directory. Required. Created if needed. |
 | `--species` | `suis` (default) or `app`. |
-| `--threads` | Threads for BLAST or the APP workflow. Default: half the CPUs. |
+| `--threads` | Threads for BLAST, or for serovar_detector with `--species app`. Default: half the CPUs. |
 | `--merged_csv` | Optional extra CSV that accumulates results across runs. *S. suis* rows are appended to it; an APP run merges an `app_serovar` column into it. |
 | `--input_species` | A species established independently for these inputs (e.g. by ANI). Recorded in the output as given; swineotype does not measure species. |
 | `--config` | YAML file overriding default settings. See [Configuration](#configuration). |
@@ -246,17 +278,25 @@ bases at their 5′ end. Each reference declares its own position in its FASTA h
 
 ## How it works: APP
 
-APP serotyping runs [serovar_detector](https://github.com/Jacques-does-science/serovar_detector),
-a Snakemake workflow bundled as a submodule. KMA aligns each assembly against a database
-of APP capsule genes, and an R step assigns the serovar from the combination of genes
-present, using a 98 % identity and coverage threshold and gene profiles for serovars 1–19
-(plus a K2O7 profile).
+APP serovars are called by
+[serovar_detector](https://github.com/KasperThystrup/serovar_detector), written by Kasper
+Thystrup Karstensen and validated by Angen *et al.* (2025; see
+[References](#references)). It is included as a git submodule pinned to its v1.1.2
+release and runs exactly as released; swineotype does not modify it. In that release,
+BLAST searches each assembly for the APP capsule genes, and an R step assigns the serovar
+from the combination of genes present, using a 98 % identity and coverage threshold and
+gene profiles for serovars 1–19 (plus a K2O7 profile). The validation study was published
+before serovar_detector began using BLAST for assemblies, in v1.0 (2026).
 
-`swineotype` prepares the run — it stages each assembly as `<sample>.fasta`, writes the
-workflow's sample sheet and configuration, and runs Snakemake — then reports the result.
-Everything the workflow produces stays in `<out_dir>/app_detector/`; its serovar table is
-`app_detector/results/serovar.tsv`. With `--merged_csv`, the suggested serovar is added as
-an `app_serovar` column (see [Usage](#usage)).
+`swineotype --species app` links each assembly into `<out_dir>/app_detector/assemblies/`
+as `<sample>.fasta`, runs `serovar_detector -a <that folder> -o <out_dir>/app_detector`,
+and reports the serovar it suggests for each sample. serovar_detector's table is
+`app_detector/serovars.tsv`, and `app_detector/swineotype_run.json` records both tools'
+versions and the inputs. With `--merged_csv`, the suggested serovar is added as an
+`app_serovar` column (see [Usage](#usage)).
+
+If you report APP serovars obtained this way, please cite serovar_detector (Angen *et al.*,
+2025).
 
 ---
 
@@ -270,7 +310,7 @@ an `app_serovar` column (see [Usage](#usage)).
 | `<out_dir>/swineotype_run.json` | Run record: swineotype version, command line, input paths, every setting used, SHA-256 checksums of the reference files, and a count of each status. |
 | `<out_dir>/<sample>/` | Raw BLAST hits for that assembly: `wzxwzy_vs_asm.tsv`, and `resolver_vs_asm.tsv` when Stage 2 ran (unless `keep_debug` is off). |
 | `<out_dir>/.swineotype_cache/` | Staged assemblies and BLAST databases. Safe to delete. |
-| `<out_dir>/app_detector/` | The APP workflow's working directory and results (`--species app`). |
+| `<out_dir>/app_detector/` | serovar_detector's output for `--species app`: `serovars.tsv` (its calls and the genes behind them) and its `config.yaml`, plus `swineotype_run.json` (both tools' versions and the inputs). |
 
 `sample` is the assembly's file name without its extension. When two inputs share a name
 (for example `runA/assembly.fasta` and `runB/assembly.fasta`), their per-sample
@@ -307,7 +347,7 @@ directories get a short hash suffix, shown in the `run_dir` column.
 | `coding_status` | `INTACT` (the alignment spans the whole gene without a frameshift or premature stop), `DISRUPTED`, or `UNASSESSED` (partial alignment; not the same as intact). |
 | `resolver_loci` | Every distinct copy of the resolver gene found, with position, codon and implied serotype. |
 | `ref_id`, `contig`, `contig_pos`, `strand`, `base` | Where the codon was read (best-scoring copy) and its third base. |
-| `app_serovar` | APP serovar, when merged into a `--merged_csv` table. |
+| `app_serovar` | APP serovar suggested by serovar_detector, when merged into a `--merged_csv` table. |
 
 ### Warnings
 
@@ -471,12 +511,12 @@ swineotype/
   config.py          defaults and settings loading
   blast.py           BLAST database and search wrappers
   utils.py           input staging and shared helpers
-  adapters/app.py    APP workflow adapter
+  adapters/app.py    runs serovar_detector for APP
   data/              reference panel, resolver genes and their manifest
 scripts/
   install_swineotype.sh   conda environment setup
   resolver_refs.py        check / rebuild the resolver genes
-third_party/serovar_detector/   APP Snakemake workflow (git submodule)
+third_party/serovar_detector/   serovar_detector v1.1.2, unmodified (git submodule)
 examples/            example S. suis and APP genomes
 tests/
 ```
@@ -510,6 +550,10 @@ tests/
 - Li K, Lacouture S, Weinert LA, *et al.* (2025) Genomic re-evaluation of clinical isolates
   reveals a structured *Streptococcus suis* complex. *J Clin Microbiol* 63:e01030-25.
   [doi:10.1128/jcm.01030-25](https://doi.org/10.1128/jcm.01030-25)
-- serovar_detector, the APP workflow, by Kasper Thystrup:
-  <https://github.com/KasperThystrup/serovar_detector> (used here through the fork at
-  <https://github.com/Jacques-does-science/serovar_detector>)
+- Angen Ø, Karstensen KT, Vilaró A, *et al.* (2025) Serotyping of *Actinobacillus
+  pleuropneumoniae* based on whole genome sequencing: validation of a bioinformatic tool.
+  *Microb Genom* 11:001434.
+  [doi:10.1099/mgen.0.001434](https://doi.org/10.1099/mgen.0.001434)
+- serovar_detector, by Kasper Thystrup Karstensen (MIT licence):
+  <https://github.com/KasperThystrup/serovar_detector>. Included unmodified as a git
+  submodule, pinned to release v1.1.2.

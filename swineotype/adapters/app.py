@@ -1,17 +1,33 @@
 #!/usr/bin/env python3
+"""APP serotyping, by serovar_detector.
+
+serovar_detector (Kasper Thystrup Karstensen, MIT licence) does the APP typing.
+It is bundled unmodified as a git submodule pinned to one of its releases and is
+installed from there. swineotype only stages the assemblies, runs
+serovar_detector's own command-line tool on them, and joins the serovar it
+suggests onto the S. suis summary.
+"""
 
 import csv
+import datetime as _dt
+import json
+import re
+import shutil
 import subprocess
 import sys
-from pathlib import Path
 from glob import glob
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import Optional, List
 
-import yaml
 import click
 
 from swineotype import __version__
 from swineotype.utils import unique_run_names
+
+CITATION = ("Angen Ø, Karstensen KT, Vilaró A, et al. (2025) Serotyping of Actinobacillus "
+            "pleuropneumoniae based on whole genome sequencing: validation of a bioinformatic "
+            "tool. Microb Genom 11(7):001434. doi:10.1099/mgen.0.001434")
 
 
 def log(msg: str):
@@ -19,18 +35,6 @@ def log(msg: str):
 
 def err(msg: str):
     click.echo(f"[ERROR] {msg}", file=sys.stderr)
-
-
-def stage_assembly(source: Path, dest: Path) -> None:
-    """Point `dest` at `source`, replacing whatever is already there.
-
-    `Path.exists()` follows symlinks, so a dangling link answered False and
-    the `symlink_to()` that followed raised FileExistsError -- while a link
-    that still resolved was kept even when it pointed at a previous run's file
-    of the same name. Both are fixed by never reusing an existing entry.
-    """
-    dest.unlink(missing_ok=True)
-    dest.symlink_to(source)
 
 
 def read_swineotype_summary(path: Path) -> tuple[list[str], list[dict]]:
@@ -53,22 +57,24 @@ def read_swineotype_summary(path: Path) -> tuple[list[str], list[dict]]:
     return list(columns), rows
 
 
-def merge_app_results(summary: Path, app_results: Path) -> None:
-    """Outer-join the APP calls onto the swineotype summary by `sample`, in place.
-
-    serovar.tsv is written by readr::write_tsv in the workflow's R summariser:
-    a real TSV with a known header. A merge is ordered by sample and a fresh
-    summary keeps serovar.tsv's order, as the pandas code this replaces did.
-    Values are copied as text: pandas re-typed any all-numeric column, so an
-    outer join that introduced a blank turned `final_serotype` "2" into "2.0".
-    """
+def read_app_calls(app_results: Path) -> dict[str, str]:
+    """Sample -> suggested serovar, from serovar_detector's serovars.tsv."""
     with open(app_results, newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         missing = {"Sample", "Suggested_serovar"} - set(reader.fieldnames or ())
         if missing:
             raise ValueError(f"{app_results} is missing expected column(s): {sorted(missing)}")
-        calls = {r["Sample"]: r["Suggested_serovar"] for r in reader}
+        return {r["Sample"]: r["Suggested_serovar"] for r in reader}
 
+
+def merge_app_results(summary: Path, app_results: Path) -> None:
+    """Outer-join the APP calls onto the swineotype summary by `sample`, in place.
+
+    A merge is ordered by sample and a fresh summary keeps serovars.tsv's order.
+    Values are copied as text: pandas re-typed any all-numeric column, so an
+    outer join that introduced a blank turned `final_serotype` "2" into "2.0".
+    """
+    calls = read_app_calls(app_results)
     if summary.exists():
         columns, rows = read_swineotype_summary(summary)
         seen = {r["sample"] for r in rows}
@@ -86,18 +92,8 @@ def merge_app_results(summary: Path, app_results: Path) -> None:
 
 
 def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype_summary: Optional[str]):
-
-    """Adapter for APP serovar detection + merge with swineotype"""
-    outdir = Path(out_dir).resolve()
-    app_dir = outdir / "app_detector"
-    results_dir = app_dir / "results"
-    tmp_dir = app_dir / "tmp"
-    config_dir = app_dir / "config"
-    logs_dir = app_dir / "logs"
-    schemas_dir = results_dir / "schemas"
-
-    for d in (results_dir, tmp_dir, config_dir, logs_dir, schemas_dir):
-        d.mkdir(parents=True, exist_ok=True)
+    """Stage the assemblies, run serovar_detector on them, and merge its calls."""
+    app_dir = Path(out_dir).resolve() / "app_detector"
 
     # Expand absolute glob patterns safely, and fail on any pattern that
     # matched nothing rather than quietly processing the ones that did.
@@ -109,8 +105,7 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
         if not matches:
             unmatched.append(pattern)
         assemblies.extend(Path(g).resolve() for g in matches)
-    # Overlapping patterns must not produce two sample-sheet rows and two
-    # staged links for one file.
+    # Overlapping patterns must not stage one file twice.
     assemblies = list(dict.fromkeys(assemblies))
 
     if unmatched:
@@ -122,98 +117,64 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
         sys.exit(2)
     log(f"Found {len(assemblies)} assemblies")
 
-    sample_names = unique_run_names(assemblies)
+    # Each file is linked as `{sample}.fasta` in one folder: serovar_detector
+    # names a sample after its file, and its -a mode types every .fasta/.fa in
+    # the folder it is given.
+    staging = app_dir / "assemblies"
+    staged = {staging / f"{name}.fasta": asm_path
+              for asm_path, name in zip(assemblies, unique_run_names(assemblies))}
+    # It matches file paths with \S+ and puts them into shell commands
+    # unquoted, so a path containing whitespace makes it crash.
+    spaced = [str(link) for link in staged if re.search(r"\s", str(link))]
+    if spaced:
+        for link in spaced:
+            err(f"serovar_detector cannot handle paths that contain spaces: {link}")
+        err("Rename those files, or choose an --out_dir without spaces.")
+        sys.exit(2)
 
-    # Write sample_sheet.csv for Snakemake/peppy
-    sample_sheet_csv = schemas_dir / "sample_sheet.csv"
-    with open(sample_sheet_csv, "w", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["sample_name", "type"])
-        for name in sample_names:
-            writer.writerow([name, "Assembly"])
-    log(f"Wrote samples table with {len(assemblies)} assemblies → {sample_sheet_csv}")
-
-
-    # KMA DB prefix (must exist): .../third_party/serovar_detector/db/Actinobacillus_pleuropneumoniae.*
-    third_party = Path(__file__).parent.parent.parent / "third_party" / "serovar_detector"
-    db_dir = third_party / "db"
-    db_prefix = db_dir / "Actinobacillus_pleuropneumoniae"
-    if not all(db_prefix.with_suffix(s).exists() for s in (".fasta", ".seq.b", ".comp.b", ".length.b")):
-        err(f"Database prefix not found or incomplete: {db_prefix}")
+    executable = shutil.which("serovar_detector")
+    if executable is None:
+        err("serovar_detector is not installed. From the swineotype checkout, install the "
+            "bundled release with `pip install ./third_party/serovar_detector` "
+            "(scripts/install_swineotype.sh does this).")
         sys.exit(1)
-    log(f"Using KMA DB prefix: {db_prefix}")
+    try:
+        sd_version = version("serovar_detector")
+    except PackageNotFoundError:
+        sd_version = "unknown"
+    log(f"APP serovars are called by serovar_detector {sd_version} "
+        f"(Kasper Thystrup Karstensen). If you use them, please cite: {CITATION}")
 
-    serovar_profiles = third_party / "config" / "serovar_profiles.yaml"
-    if not serovar_profiles.exists():
-        err(f"Missing serovar profiles YAML: {serovar_profiles}")
-        sys.exit(1)
+    # Rebuilt on every run, so that the folder holds exactly this run's inputs.
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    for link, asm_path in staged.items():
+        link.symlink_to(asm_path)
 
-    # Copy serovar_profiles to config_dir for the R script
-    import shutil
-    shutil.copy(serovar_profiles, config_dir / "serovar_profiles.yaml")
+    # serovar_detector exits 0 even when its workflow fails, so success is the
+    # results table appearing -- which a previous run's copy must not fake.
+    app_results = app_dir / "serovars.tsv"
+    app_results.unlink(missing_ok=True)
 
-    # Create the peppy project config, which will live in the schemas_dir
-    project_cfg = schemas_dir / "project_config.yaml"
-    if not project_cfg.exists():
-        project_cfg.write_text(
-            "pep_version: 2.1.0\n"
-            "name: app_serovar_project\n"
-            "sample_table: sample_sheet.csv\n"  # Points to the CSV in the same directory
-        )
-
-    config_yaml = config_dir / "config.yaml"
-    config = {
-        "outdir": str(results_dir),
-        "tmpdir": str(tmp_dir),
-        "append_results": False,
-        "database": str(db_prefix),
-        "threads": int(threads),
-        "threshold": 98.0,
-        "debug": False,
-        "serovar_profiles": str(serovar_profiles),
-        "summary_file": str(results_dir / "serovar_summary.tsv"),
-        "log_dir": str(logs_dir),
-        "results_dir": str(results_dir),
-        "schemas": str(schemas_dir),
-        "version": "2.1.0",
+    cmd = [executable, "-a", str(staging), "-o", str(app_dir), "-t", str(threads)]
+    (app_dir / "swineotype_run.json").write_text(json.dumps({
         "swineotype_version": __version__,
-    }
-    with open(config_yaml, "w") as fh:
-        yaml.dump(config, fh)
-    log(f"Workflow config written: {config_yaml}")
-
-    # Create symlinks for the assembly files in the tmp directory, which is what
-    # the serovar_detector workflow expects.
-    assembly_tmp_dir = tmp_dir / "assemblies"
-    assembly_tmp_dir.mkdir(parents=True, exist_ok=True)
-    log(f"Creating symlinks for assemblies in {assembly_tmp_dir}")
-    for asm_path, name in zip(assemblies, sample_names):
-        # `{sample}.fasta`, always: the workflow's input pattern is literal, so
-        # staging a .fa or .fna under its own name left the rule with no input.
-        stage_assembly(asm_path, assembly_tmp_dir / f"{name}.fasta")
-
-
-    # Run Snakemake
-    snakefile = third_party / "workflow" / "Snakefile"
-    cmd = [
-        "snakemake",
-        "-s", str(snakefile),
-        "--configfile", str(config_yaml),
-        "--cores", str(threads),
-        "--directory", str(app_dir),
-        "--use-conda",
-    ]
+        "serovar_detector_version": sd_version,
+        "run_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+        "command": cmd,
+        "assemblies": [str(a) for a in assemblies],
+    }, indent=2) + "\n")
     log(f"Command: {' '.join(cmd)}")
-    ret = subprocess.run(cmd)
-    if ret.returncode != 0:
-        err("SerovarDetector failed.")
-        sys.exit(ret.returncode)
+    # serovar_detector runs Snakemake in the current directory, which is where
+    # Snakemake keeps its .snakemake/ bookkeeping: keep that inside app_dir.
+    ret = subprocess.run(cmd, cwd=app_dir)
+    if ret.returncode != 0 or not app_results.exists():
+        err(f"serovar_detector did not produce {app_results}; see its output above.")
+        sys.exit(ret.returncode or 1)
 
-    # APP results
-    app_results = results_dir / "serovar.tsv"
-    if not app_results.exists():
-        err(f"APP serovar results not found: {app_results}")
-        sys.exit(1)
+    for sample, serovar in read_app_calls(app_results).items():
+        click.echo(f"[OK] {sample} => {serovar} (serovar_detector)")
+    log(f"APP serovar table: {app_results}")
 
     # Optional merge with the swineotype summary
     if swineotype_summary:
@@ -224,4 +185,4 @@ def run_app_analysis(assembly: List[str], out_dir: str, threads: int, swineotype
         except ValueError as exc:
             err(str(exc))
             sys.exit(1)
-        log(f"[SUCCESS] Summary written \u2192 {swineo}")
+        log(f"[SUCCESS] Summary written → {swineo}")

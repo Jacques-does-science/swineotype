@@ -28,14 +28,15 @@ echo "==> Installing dependencies into $ENV_NAME"
 # samtools and bcftools were dropped: Stage 2 used to extract the diagnostic
 # base with `samtools faidx`, but it now reads it out of the BLAST alignment
 # directly. Neither is referenced by swineotype or by serovar_detector.
-# pandas, snakemake, kma and peppy serve the APP workflow; swineotype itself
-# needs only click and PyYAML, which pyproject.toml declares.
+# pandas, snakemake and peppy are what serovar_detector (APP) needs to start
+# its workflow, which then builds its own BLAST and R environments with conda
+# on first use. swineotype itself needs only click and PyYAML, which
+# pyproject.toml declares.
 conda install -n "$ENV_NAME" -c conda-forge -c bioconda \
     blast \
     pandas \
     pyyaml \
     snakemake \
-    kma \
     click \
     pytest \
     peppy -y
@@ -43,9 +44,9 @@ conda install -n "$ENV_NAME" -c conda-forge -c bioconda \
 echo "==> Installing swineotype"
 conda run -n "$ENV_NAME" pip install -e .
 
-echo "==> Note: If you have system R installed (e.g., via Homebrew),"
-echo "    you may need to install R packages manually:"
-echo "    R -e 'install.packages(c(\"dplyr\", \"purrr\", \"readr\", \"stringr\", \"tidyr\", \"tibble\", \"yaml\", \"logger\"), repos=\"https://cloud.r-project.org\")'"
+# The bundled submodule is an unmodified serovar_detector release.
+echo "==> Installing serovar_detector (APP) from third_party/serovar_detector"
+conda run -n "$ENV_NAME" pip install ./third_party/serovar_detector
 
 echo "==> Done."
 echo
