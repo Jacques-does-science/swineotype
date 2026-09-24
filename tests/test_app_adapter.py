@@ -1,10 +1,12 @@
-"""APP adapter: identities, staged filenames, and merging with the suis summary."""
+"""APP adapter: identities, staging for serovar_detector, and merging with the suis summary."""
 import csv
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from swineotype.adapters.app import merge_app_results, read_swineotype_summary, stage_assembly
+from swineotype.adapters.app import merge_app_results, read_swineotype_summary
 from swineotype.main import SUMMARY_COLUMNS
 from swineotype.utils import unique_run_names
 
@@ -19,13 +21,14 @@ def write_summary(path: Path, rows):
             writer.writerow({**{c: "" for c in SUMMARY_COLUMNS}, **r})
 
 
-def write_serovar_tsv(path: Path, calls):
-    """serovar.tsv as the workflow's R summariser writes it (readr::write_tsv)."""
+def write_serovars_tsv(path: Path, calls):
+    """serovars.tsv as serovar_detector 1.1.x writes it for assemblies."""
     with path.open("w", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t")
-        writer.writerow(["Sample", "Date", "Suggested_serovar", "Template_Gene"])
+        writer.writerow(["Sample", "Mapper", "Suggested_serovar", "Frequency",
+                         "Serovar_match", "Serovar_partial"])
         for sample, serovar in calls:
-            writer.writerow([sample, "2026-09-23", serovar, "cps"])
+            writer.writerow([sample, "Blastn", serovar, "1 of 1", "cps", ""])
     return path
 
 
@@ -53,14 +56,14 @@ def test_app_calls_are_outer_joined_onto_the_summary(tmp_path):
     summary = tmp_path / "summary.csv"
     write_summary(summary, [{"sample": "iso1", "final_serotype": "2"},
                             {"sample": "iso2", "final_serotype": "1/2"}])
-    tsv = write_serovar_tsv(tmp_path / "serovar.tsv", [("iso1", "APP_5"), ("iso3", "APP_7")])
+    tsv = write_serovars_tsv(tmp_path / "serovars.tsv", [("iso1", "S5"), ("iso3", "S7")])
 
     merge_app_results(summary, tsv)
 
     rows = read_rows(summary)
     assert [r["sample"] for r in rows] == ["iso1", "iso2", "iso3"], "ordered by sample"
     assert {r["sample"]: r["app_serovar"] for r in rows} == \
-        {"iso1": "APP_5", "iso2": "", "iso3": "APP_7"}
+        {"iso1": "S5", "iso2": "", "iso3": "S7"}
     assert list(rows[0]) == SUMMARY_COLUMNS + ["app_serovar"]
 
 
@@ -70,7 +73,7 @@ def test_merging_keeps_serotypes_as_text(tmp_path):
     summary = tmp_path / "summary.csv"
     write_summary(summary, [{"sample": "iso1", "final_serotype": "2"},
                             {"sample": "iso2", "final_serotype": "14"}])
-    tsv = write_serovar_tsv(tmp_path / "serovar.tsv", [("app_only", "APP_7")])
+    tsv = write_serovars_tsv(tmp_path / "serovars.tsv", [("app_only", "S7")])
 
     merge_app_results(summary, tsv)
 
@@ -80,17 +83,17 @@ def test_merging_keeps_serotypes_as_text(tmp_path):
 
 def test_without_a_summary_the_app_calls_are_written_in_their_own_order(tmp_path):
     summary = tmp_path / "summary.csv"
-    tsv = write_serovar_tsv(tmp_path / "serovar.tsv", [("iso9", "APP_1"), ("iso2", "APP_3")])
+    tsv = write_serovars_tsv(tmp_path / "serovars.tsv", [("iso9", "S1"), ("iso2", "S3")])
 
     merge_app_results(summary, tsv)
 
     assert [(r["sample"], r["app_serovar"]) for r in read_rows(summary)] == \
-        [("iso9", "APP_1"), ("iso2", "APP_3")]
+        [("iso9", "S1"), ("iso2", "S3")]
 
 
-def test_a_serovar_tsv_missing_its_columns_is_rejected(tmp_path):
-    tsv = tmp_path / "serovar.tsv"
-    tsv.write_text("Sample\tDate\niso1\t2026-09-23\n")
+def test_a_serovars_tsv_missing_its_columns_is_rejected(tmp_path):
+    tsv = tmp_path / "serovars.tsv"
+    tsv.write_text("Sample\tMapper\niso1\tBlastn\n")
     with pytest.raises(ValueError, match="Suggested_serovar"):
         merge_app_results(tmp_path / "summary.csv", tsv)
 
@@ -114,19 +117,19 @@ def test_numeric_looking_sample_names_stay_strings(tmp_path):
     nothing; "0012" and "12" are different samples."""
     summary = tmp_path / "summary.csv"
     write_summary(summary, [{"sample": "0012"}, {"sample": "12"}])
-    tsv = write_serovar_tsv(tmp_path / "serovar.tsv", [("0012", "APP_2")])
+    tsv = write_serovars_tsv(tmp_path / "serovars.tsv", [("0012", "S2")])
 
     merge_app_results(summary, tsv)
 
     assert {r["sample"]: r["app_serovar"] for r in read_rows(summary)} == \
-        {"0012": "APP_2", "12": ""}
+        {"0012": "S2", "12": ""}
 
 
 # --- sample identity ---------------------------------------------------
 
 def test_two_assembly_fasta_paths_get_distinct_identities(tmp_path):
-    """Regression: both reduced to the stem 'assembly', so they shared one row
-    in the sample sheet and one staged symlink."""
+    """Regression: both reduced to the stem 'assembly', so they shared one
+    staged file and one sample identity."""
     a = tmp_path / "runA" / "assembly.fasta"
     b = tmp_path / "runB" / "assembly.fasta"
     for p in (a, b):
@@ -151,185 +154,170 @@ def test_identity_is_stable_for_the_same_path(tmp_path):
     assert unique_run_names([a, b]) == unique_run_names([a, b])
 
 
-# --- staging -----------------------------------------------------------
-
-def test_a_stale_valid_symlink_is_replaced(tmp_path):
-    """Regression: rerunning with a new input of the same name kept the old
-    link, because it still resolved and `exists()` therefore said True."""
-    old = tmp_path / "old.fasta"; old.write_text(">old\nA\n")
-    new = tmp_path / "new.fasta"; new.write_text(">new\nC\n")
-    dest = tmp_path / "staged.fasta"
-
-    stage_assembly(old, dest)
-    stage_assembly(new, dest)
-
-    assert dest.resolve() == new.resolve()
-    assert dest.read_text() == ">new\nC\n"
-
-
-def test_a_broken_symlink_is_replaced_without_raising(tmp_path):
-    """Regression: `exists()` follows symlinks, so a dangling link answered
-    False and the symlink_to() that followed raised FileExistsError."""
-    gone = tmp_path / "gone.fasta"; gone.write_text(">g\nA\n")
-    dest = tmp_path / "staged.fasta"
-    stage_assembly(gone, dest)
-    gone.unlink()
-    assert dest.is_symlink() and not dest.exists()
-
-    real = tmp_path / "real.fasta"; real.write_text(">r\nC\n")
-    stage_assembly(real, dest)
-
-    assert dest.read_text() == ">r\nC\n"
-
-
-def test_staging_is_idempotent(tmp_path):
-    src = tmp_path / "a.fasta"; src.write_text(">a\nA\n")
-    dest = tmp_path / "staged.fasta"
-    stage_assembly(src, dest)
-    stage_assembly(src, dest)
-    assert dest.resolve() == src.resolve()
-
-
-def test_staged_filenames_are_normalised(tmp_path, monkeypatch):
-    """End to end through the adapter's staging step, for .fa / .fna inputs."""
-    from swineotype.adapters import app as app_mod
-
-    inputs = [tmp_path / "iso1.fa", tmp_path / "iso2.fna", tmp_path / "iso3.fasta"]
-    for p in inputs:
-        p.write_text(">c\nACGT\n")
-    staged_dir = tmp_path / "staged"; staged_dir.mkdir()
-
-    names = unique_run_names(inputs)
-    for src, name in zip(inputs, names):
-        app_mod.stage_assembly(src, staged_dir / f"{name}.fasta")
-
-    assert sorted(p.name for p in staged_dir.iterdir()) == \
-        ["iso1.fasta", "iso2.fasta", "iso3.fasta"]
-
-
-def test_sample_sheet_names_match_the_staged_filenames(tmp_path):
-    """The sheet's sample_name is the wildcard the workflow substitutes into
-    `{tmpdir}/assemblies/{sample}.fasta`; if they diverge, nothing runs."""
-    inputs = [tmp_path / "runA" / "assembly.fa", tmp_path / "runB" / "assembly.fna"]
-    for p in inputs:
-        p.parent.mkdir(); p.write_text(">c\nACGT\n")
-
-    names = unique_run_names(inputs)
-    staged = [f"{n}.fasta" for n in names]
-
-    assert [Path(s).stem for s in staged] == names
-    assert len(set(staged)) == 2
-
-
-# --- the adapter's setup phase, end to end -----------------------------
-
-def fake_kma_db(third_party: Path):
-    db = third_party / "db"
-    db.mkdir(parents=True, exist_ok=True)
-    for suffix in (".fasta", ".seq.b", ".comp.b", ".length.b"):
-        (db / f"Actinobacillus_pleuropneumoniae{suffix}").write_text("x")
-    cfg = third_party / "config"
-    cfg.mkdir(parents=True, exist_ok=True)
-    (cfg / "serovar_profiles.yaml").write_text("profiles: {}\n")
-
+# --- running serovar_detector ------------------------------------------
 
 @pytest.fixture
-def app_setup(tmp_path, monkeypatch):
-    """Run run_app_analysis up to (not including) the Snakemake invocation."""
+def serovar_detector(monkeypatch):
+    """Stand in for the serovar_detector command.
+
+    Records each call and, like the real tool, writes <-o>/serovars.tsv with
+    one row per .fasta in the -a folder. Set `write_results` to False to
+    imitate a failed workflow, after which the real tool still exits 0.
+    """
     from swineotype.adapters import app as app_mod
 
-    third_party = tmp_path / "third_party" / "serovar_detector"
-    fake_kma_db(third_party)
-    monkeypatch.setattr(app_mod, "__file__",
-                        str(tmp_path / "swineotype" / "adapters" / "app.py"))
+    tool = {"calls": [], "returncode": 0, "write_results": True}
+    monkeypatch.setattr(app_mod.shutil, "which", lambda name: f"/opt/bin/{name}")
 
-    calls = {}
-
-    class Done:
-        returncode = 1  # stop before the results step
-
-    def fake_run(cmd, *a, **k):
-        calls["cmd"] = cmd
-        return Done()
+    def fake_run(cmd, cwd=None, **kwargs):
+        staging = Path(cmd[cmd.index("-a") + 1])
+        out = Path(cmd[cmd.index("-o") + 1])
+        links = sorted(staging.iterdir())
+        tool["calls"].append({"cmd": cmd, "cwd": Path(cwd), "staged": [p.name for p in links],
+                              "targets": [p.resolve() for p in links]})
+        if tool["write_results"]:
+            write_serovars_tsv(out / "serovars.tsv", [(p.stem, "S1") for p in links])
+        return subprocess.CompletedProcess(cmd, tool["returncode"])
 
     monkeypatch.setattr(app_mod.subprocess, "run", fake_run)
-
-    def go(patterns, out_dir):
-        with pytest.raises(SystemExit):
-            app_mod.run_app_analysis(assembly=patterns, out_dir=str(out_dir),
-                                     threads=1, swineotype_summary=None)
-        return calls
-
-    return go
+    return tool
 
 
-def test_setup_stages_every_input_as_sample_dot_fasta(tmp_path, app_setup):
-    inputs = tmp_path / "in"; inputs.mkdir()
-    for name in ("iso1.fa", "iso2.fna", "iso3.fasta"):
-        (inputs / name).write_text(">c\nACGT\n")
-
-    out = tmp_path / "out"
-    app_setup([str(inputs / "*")], out)
-
-    staged = out / "app_detector" / "tmp" / "assemblies"
-    assert sorted(p.name for p in staged.iterdir()) == \
-        ["iso1.fasta", "iso2.fasta", "iso3.fasta"]
-
-    sheet = list(csv.DictReader((out / "app_detector" / "results" / "schemas"
-                                 / "sample_sheet.csv").open()))
-    assert [r["sample_name"] for r in sheet] == ["iso1", "iso2", "iso3"]
-    assert {f"{r['sample_name']}.fasta" for r in sheet} == \
-        {p.name for p in staged.iterdir()}, "sheet names must match staged filenames"
-
-
-def test_setup_disambiguates_two_assembly_fasta_inputs(tmp_path, app_setup):
-    for run_name in ("runA", "runB"):
-        d = tmp_path / "in" / run_name; d.mkdir(parents=True)
-        (d / "assembly.fasta").write_text(f">{run_name}\nACGT\n")
-
-    out = tmp_path / "out"
-    app_setup([str(tmp_path / "in" / "*" / "assembly.fasta")], out)
-
-    staged = sorted(p.name for p in
-                    (out / "app_detector" / "tmp" / "assemblies").iterdir())
-    assert len(staged) == 2, "two different files must not share one staged name"
-
-
-def test_setup_deduplicates_overlapping_patterns(tmp_path, app_setup):
-    inputs = tmp_path / "in"; inputs.mkdir()
-    (inputs / "iso1.fasta").write_text(">c\nACGT\n")
-
-    out = tmp_path / "out"
-    app_setup([str(inputs / "*.fasta"), str(inputs / "iso1.fasta")], out)
-
-    sheet = list(csv.DictReader((out / "app_detector" / "results" / "schemas"
-                                 / "sample_sheet.csv").open()))
-    assert [r["sample_name"] for r in sheet] == ["iso1"], "one file, one row"
-
-
-def test_setup_rejects_a_pattern_that_matched_nothing(tmp_path, monkeypatch, capsys):
+def run_app(patterns, out_dir, summary=None):
     from swineotype.adapters import app as app_mod
-    inputs = tmp_path / "in"; inputs.mkdir()
-    (inputs / "iso1.fasta").write_text(">c\nACGT\n")
+    app_mod.run_app_analysis(assembly=[str(p) for p in patterns], out_dir=str(out_dir),
+                             threads=2, swineotype_summary=str(summary) if summary else None)
+
+
+def fasta_files(folder: Path, *names):
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (folder / name).write_text(">c\nACGT\n")
+    return folder
+
+
+def test_every_input_is_staged_as_sample_dot_fasta_and_handed_over(tmp_path, serovar_detector):
+    inputs = fasta_files(tmp_path / "in", "iso1.fa", "iso2.fna", "iso3.fasta")
+
+    run_app([inputs / "*"], tmp_path / "out")
+
+    call, = serovar_detector["calls"]
+    app_dir = (tmp_path / "out" / "app_detector").resolve()
+    assert call["staged"] == ["iso1.fasta", "iso2.fasta", "iso3.fasta"]
+    assert call["targets"] == [(inputs / n).resolve() for n in ("iso1.fa", "iso2.fna", "iso3.fasta")]
+    assert call["cmd"] == ["/opt/bin/serovar_detector", "-a", str(app_dir / "assemblies"),
+                           "-o", str(app_dir), "-t", "2"]
+    assert call["cwd"] == app_dir, "Snakemake's .snakemake/ must land inside app_detector/"
+
+
+def test_two_assembly_fasta_inputs_are_staged_under_distinct_names(tmp_path, serovar_detector):
+    for run_name in ("runA", "runB"):
+        fasta_files(tmp_path / "in" / run_name, "assembly.fasta")
+
+    run_app([tmp_path / "in" / "*" / "assembly.fasta"], tmp_path / "out")
+
+    staged = serovar_detector["calls"][0]["staged"]
+    assert len(set(staged)) == 2, "two different files must not share one staged name"
+
+
+def test_overlapping_patterns_stage_one_file_once(tmp_path, serovar_detector):
+    inputs = fasta_files(tmp_path / "in", "iso1.fasta")
+
+    run_app([inputs / "*.fasta", inputs / "iso1.fasta"], tmp_path / "out")
+
+    assert serovar_detector["calls"][0]["staged"] == ["iso1.fasta"], "one file, one sample"
+
+
+def test_a_rerun_hands_over_only_the_current_inputs(tmp_path, serovar_detector):
+    """serovar_detector types every .fasta in the folder it is given, so a
+    previous run's inputs left in it would be typed again."""
+    inputs = fasta_files(tmp_path / "in", "iso1.fasta", "iso2.fasta", "iso3.fasta")
+
+    run_app([inputs / "iso1.fasta", inputs / "iso2.fasta"], tmp_path / "out")
+    run_app([inputs / "iso3.fasta"], tmp_path / "out")
+
+    assert serovar_detector["calls"][1]["staged"] == ["iso3.fasta"]
+
+
+def test_a_pattern_that_matched_nothing_is_rejected(tmp_path, serovar_detector):
+    inputs = fasta_files(tmp_path / "in", "iso1.fasta")
 
     with pytest.raises(SystemExit) as exc:
-        app_mod.run_app_analysis(
-            assembly=[str(inputs / "*.fasta"), str(inputs / "*.fna")],
-            out_dir=str(tmp_path / "out"), threads=1, swineotype_summary=None)
+        run_app([inputs / "*.fasta", inputs / "*.fna"], tmp_path / "out")
     assert exc.value.code == 2
+    assert serovar_detector["calls"] == []
 
 
-def test_setup_records_the_swineotype_version(tmp_path, app_setup):
-    """config.yaml and sample_sheet.csv already persist the run; the version
-    is the one thing they did not carry."""
-    import yaml
+def test_a_failed_workflow_is_not_reported_as_success(tmp_path, serovar_detector):
+    """serovar_detector exits 0 when its Snakemake workflow fails, so the exit
+    code alone would report a run that produced nothing as a success."""
+    inputs = fasta_files(tmp_path / "in", "iso1.fasta")
+    serovar_detector["write_results"] = False
+
+    with pytest.raises(SystemExit) as exc:
+        run_app([inputs / "iso1.fasta"], tmp_path / "out")
+    assert exc.value.code == 1
+
+
+def test_a_previous_runs_table_does_not_pass_for_this_run(tmp_path, serovar_detector):
+    inputs = fasta_files(tmp_path / "in", "iso1.fasta")
+    run_app([inputs / "iso1.fasta"], tmp_path / "out")
+    serovar_detector["write_results"] = False
+
+    with pytest.raises(SystemExit) as exc:
+        run_app([inputs / "iso1.fasta"], tmp_path / "out")
+    assert exc.value.code == 1
+
+
+def test_a_missing_serovar_detector_names_the_install_command(tmp_path, monkeypatch, capsys):
+    from swineotype.adapters import app as app_mod
+    monkeypatch.setattr(app_mod.shutil, "which", lambda name: None)
+    inputs = fasta_files(tmp_path / "in", "iso1.fasta")
+
+    with pytest.raises(SystemExit) as exc:
+        run_app([inputs / "iso1.fasta"], tmp_path / "out")
+    assert exc.value.code == 1
+    assert "pip install ./third_party/serovar_detector" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("out_name, file_name", [("my results", "iso1.fasta"),
+                                                 ("out", "iso 1.fasta")])
+def test_a_path_with_spaces_is_rejected_before_running(tmp_path, serovar_detector,
+                                                        out_name, file_name):
+    """serovar_detector matches paths with \\S+ and crashes on a space."""
+    inputs = fasta_files(tmp_path / "in", file_name)
+
+    with pytest.raises(SystemExit) as exc:
+        run_app([inputs / file_name], tmp_path / out_name)
+    assert exc.value.code == 2
+    assert serovar_detector["calls"] == []
+
+
+def test_the_calls_are_merged_into_the_summary(tmp_path, serovar_detector):
+    summary = tmp_path / "all_isolates.csv"
+    write_summary(summary, [{"sample": "suis1", "final_serotype": "2"}])
+    inputs = fasta_files(tmp_path / "in", "app1.fasta")
+
+    run_app([inputs / "app1.fasta"], tmp_path / "out", summary=summary)
+
+    assert {r["sample"]: (r["final_serotype"], r["app_serovar"]) for r in read_rows(summary)} == \
+        {"suis1": ("2", ""), "app1": ("", "S1")}
+
+
+def test_the_run_credits_serovar_detector_and_records_both_versions(tmp_path, serovar_detector,
+                                                                    monkeypatch, capsys):
     from swineotype import __version__
-    inputs = tmp_path / "in"; inputs.mkdir()
-    (inputs / "iso1.fasta").write_text(">c\nACGT\n")
+    from swineotype.adapters import app as app_mod
+    monkeypatch.setattr(app_mod, "version", lambda dist: "1.1.2")
+    inputs = fasta_files(tmp_path / "in", "app1.fasta")
 
-    out = tmp_path / "out"
-    app_setup([str(inputs / "*.fasta")], out)
+    run_app([inputs / "app1.fasta"], tmp_path / "out")
 
-    cfg = yaml.safe_load((out / "app_detector" / "config" / "config.yaml").read_text())
-    assert cfg["swineotype_version"] == __version__
-    assert cfg["threshold"] == 98.0
+    out = capsys.readouterr().out
+    assert "serovar_detector 1.1.2 (Kasper Thystrup Karstensen)" in out
+    assert "doi:10.1099/mgen.0.001434" in out
+    assert "[OK] app1 => S1 (serovar_detector)" in out
+    record = json.loads((tmp_path / "out" / "app_detector" / "swineotype_run.json").read_text())
+    assert record["swineotype_version"] == __version__
+    assert record["serovar_detector_version"] == "1.1.2"
+    assert record["assemblies"] == [str((inputs / "app1.fasta").resolve())]

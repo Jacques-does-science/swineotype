@@ -50,3 +50,5 @@ results/
 # the old install-tree data dir, and the per-run cache (staged assemblies + BLAST databases)
 /data/
 .swineotype_cache/
+# serovar_detector's output from an APP run (--species app)
+app_detector/
