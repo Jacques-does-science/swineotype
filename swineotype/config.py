@@ -10,6 +10,10 @@ import yaml
 DEFAULT_CONFIG = {
     "wzxwzy_fasta": "suis_wzxwzy_whitelist.fasta",
     "resolver_refs_fasta": "suis_resolver_refs.fasta",
+    # Conserved chromosomal sequence either side of the cps cassette, used
+    # only when Stage 1 matched nothing, to say whether the region that holds
+    # the locus is present at all.
+    "cps_flank_fasta": "suis_cps_flank.fasta",
     "tmp_dir": "",  # empty = derive per-run (see load_config)
     "plurality": 0.60,
     "delta": 100,
@@ -76,6 +80,7 @@ def load_config(config_file: str | None = None) -> dict:
     config["data_dir"] = data_dir()
     config["wzxwzy_fasta"] = config["data_dir"] / config["wzxwzy_fasta"]
     config["resolver_refs_fasta"] = config["data_dir"] / config["resolver_refs_fasta"]
+    config["cps_flank_fasta"] = config["data_dir"] / config["cps_flank_fasta"]
 
     # tmp_dir: an explicit setting (config file or SWINEO_TMP_DIR) wins and is
     # flagged so the CLI does not override it. Otherwise fall back to the

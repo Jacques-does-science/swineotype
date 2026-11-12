@@ -198,7 +198,9 @@ the *cps* locus. `swineotype` reads the serotype from that locus in two stages.
 ```mermaid
 flowchart TD
     A[Assembly FASTA] --> B[Stage 1: BLAST the wzx / wzy<br/>capsule-gene panel]
-    B -->|nothing matches| R1[NO_CPS_MATCH]
+    B -->|nothing matches| F{Conserved cps<br/>flanking region?}
+    F -->|absent| R1[NO_CPS_MATCH]
+    F -->|present| R1b[CPS_REGION_UNTYPED]
     B -->|wzx matches, no wzy| R2[NO_WZY_MATCH]
     B -->|best locus belongs to<br/>another species| R3[NON_TARGET_SPECIES]
     B --> C{One capsule family<br/>clearly ahead?}
@@ -325,7 +327,8 @@ directories get a short hash suffix, shown in the `run_dir` column.
 | `FAMILY_ONLY` | The family is established, but the exact member could not be read; `family_serotype` holds e.g. `2 or 1/2`, and `stage2_status` says why. | empty |
 | `NO_CALL_FAMILY_AMBIGUOUS` | Two or more capsule families have similar support. | empty |
 | `NO_WZY_MATCH` | Capsule genes are present (*wzx*), but no reference *wzy* matched. See [below](#no_wzy_match). | empty |
-| `NO_CPS_MATCH` | Nothing in the capsule panel matched. No species is inferred. | empty |
+| `CPS_REGION_UNTYPED` | Nothing in the capsule panel matched, but the conserved *cps* flanking region is present: an *S. suis* capsule region this panel cannot type. See [below](#cps_region_untyped). | empty |
+| `NO_CPS_MATCH` | Nothing in the capsule panel matched and no *cps* flanking region was found either. No species is inferred. | empty |
 | `NON_TARGET_SPECIES` | The best-matching locus belongs to another species (`matched_reference_taxon`). | empty |
 | `NO_CALL_PAIR_CONFLICT` | Internal consistency check failed. Please report it. | empty |
 
@@ -393,6 +396,31 @@ separated by the `recN` PCR ([Li et al. 2025](https://doi.org/10.1128/jcm.01030-
 Confirm species with genome-level evidence — ANI against type strains (Li et al. 2025
 separate species within the complex at 92.33 % ANI) or a conserved-marker panel — and
 record it with `--input_species`.
+
+### CPS_REGION_UNTYPED
+
+`NO_CPS_MATCH` used to cover two findings that call for opposite responses: an *S. suis*
+genome carrying a capsule cassette the panel does not hold, and an assembly with nothing
+of the kind in it at all — an unrelated organism, or one too fragmentary to say. When
+Stage 1 matches nothing, the tool now BLASTs a second, small reference: two 3 kb stretches
+of the conserved chromosomal sequence either side of the cassette
+(`data/suis_cps_flank.fasta`, taken from *S. suis* 05ZYH33, CP000407.1). Both present
+gives `CPS_REGION_UNTYPED`; neither gives `NO_CPS_MATCH`. The probe runs only on this
+path, so it costs a typed sample nothing.
+
+The flanks are chromosomal and survive a deleted cassette, so finding them does **not**
+establish that a cassette is present, intact, or novel. The warnings say only what was
+seen:
+
+- `cps_flanking_region_present:<which>` — which probes were found.
+- `interflank_span=<n>` — when both landed on one contig, the sequence between them. This
+  is the one measurement bearing on whether a cassette is there: a span of locus size
+  means something sits in the seat, a span near zero means the locus is deleted.
+- `interflank_span_not_assessed` — the usual outcome on a draft assembly, where the two
+  flanks fall on different contigs. Nothing is claimed.
+
+Follow one up the same way as `NO_WZY_MATCH` below. `cpsflank_vs_asm.tsv` in the sample's
+directory gives the flank coordinates, which bracket the region to extract.
 
 ### NO_WZY_MATCH
 
@@ -463,6 +491,19 @@ to, so a label can be corrected without touching code:
 ```text
 >wzy_AB737828 [locus=SS_CPS] [type_id=22] [allele_id=wzy_AB737828] [species=Streptococcus parasuis] [source_gb=AB737828] ...
 ```
+
+**Capsule flanking region** — `suis_cps_flank.fasta`: two 3,001 bp stretches of the
+conserved chromosomal sequence either side of the *cps* cassette, taken verbatim from
+*S. suis* 05ZYH33 (CP000407.1, 543200–546200 and 585200–588200). Used only when Stage 1
+matches nothing, to separate `CPS_REGION_UNTYPED` from `NO_CPS_MATCH`.
+
+The two windows were chosen empirically, not from an annotation: the 50 kb around the
+05ZYH33 *cps* locus was aligned against assemblies spanning serotypes 3, 7, 9, 16 and 28
+plus an untypable isolate, and the blocks present in all of them were kept. Checked
+against 109 independently assembled *S. suis* genomes (Osei et al. 2026, PRJNA1295417),
+both probes are covered at >= 80% in 108; the exception is an isolate at 85.9% ANI to
+*S. suis*, i.e. outside the species. Neither probe hits any of the three shipped
+*A. pleuropneumoniae* genomes.
 
 **Resolver genes** — `suis_resolver_refs.fasta`: four genes, each a verbatim slice of a
 public record. Accession, coordinates, strand, diagnostic position, SHA-256 checksum and

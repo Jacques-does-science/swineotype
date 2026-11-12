@@ -22,7 +22,8 @@ REF_2_12_ALT = "cps1/2K|pair=2_vs_1_2|pos=483|G_serotype=2|CT_serotype=1/2"
 def main_config(**over):
     """A config of the shape process_one() expects."""
     cfg = {"target_species": SUIS, "pair_1_14": {"1", "14"}, "pair_2_1_2": {"2", "1/2"},
-           "require_wzy": 1, "wzxwzy_fasta": "w.fasta", "resolver_refs_fasta": "r.fasta"}
+           "require_wzy": 1, "wzxwzy_fasta": "w.fasta", "resolver_refs_fasta": "r.fasta",
+           "cps_flank_fasta": "f.fasta"}
     cfg.update(over)
     return cfg
 

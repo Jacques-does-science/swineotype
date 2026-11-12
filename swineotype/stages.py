@@ -351,6 +351,66 @@ def stage1_score(assembly_fa: str, whitelist_fa: str, threads: int, run_dir: Pat
 # Stage 2: gap-aware read-out of the diagnostic codon
 # ---------------------------------------------------------------------------
 
+def cps_flank_probe(assembly_fa: str, flank_fa: str, threads: int, run_dir: Path,
+                    config: dict) -> dict:
+    """Is the chromosomal region that HOLDS the cps locus present?
+
+    Run only when Stage 1 matched no reference type, to separate two outcomes
+    the tool used to report identically. An assembly with the conserved
+    flanking region intact is an S. suis cps region this panel cannot type --
+    a lead worth following. An assembly with no flank either matched nothing
+    because there is nothing of the kind there: an unrelated organism, or an
+    assembly too poor or too fragmentary to say.
+
+    The flanks are chromosomal sequence either side of the cassette, so they
+    are present in every S. suis genome whether or not the cassette is intact.
+    Finding them therefore does NOT establish that a cassette is present, that
+    it is intact, or that it is novel. When both flanks land on one contig the
+    sequence between them is measured and reported as `interflank_span`, which
+    is the one piece of evidence that bears on whether a cassette is there at
+    all; on a draft assembly they usually do not, and then nothing is claimed.
+    """
+    db_prefix = make_db_if_needed(assembly_fa, config["tmp_dir"])
+    tsv_text = run_blast(flank_fa, db_prefix, threads, STAGE1_OUTFMT)
+    if config["keep_debug"]:
+        out = run_dir / "cpsflank_vs_asm.tsv"
+        out.write_text(tsv_text + ("\n" if tsv_text else ""))
+        if config["gzip_debug"]:
+            gzip_file(out)
+
+    # Cover each probe by query position: a flank is routinely split into
+    # several HSPs, and summing their lengths would double-count overlaps.
+    covered: dict[str, set[int]] = defaultdict(set)
+    qlen: dict[str, int] = {}
+    span: dict[str, list] = {}
+    for line in filter(None, tsv_text.splitlines()):
+        parts = line.split("\t")
+        if len(parts) < 11:
+            continue
+        qseqid, sseqid, pident, _l, ql, _e, _b, qstart, qend, sstart, send = parts[:11]
+        if float(pident) < config["min_pid"]:
+            continue
+        qlen[qseqid] = int(ql)
+        covered[qseqid].update(range(int(qstart), int(qend) + 1))
+        lo, hi = sorted((int(sstart), int(send)))
+        prev = span.get(qseqid)
+        if prev is None or hi - lo > prev[2] - prev[1]:
+            span[qseqid] = [sseqid, lo, hi]
+
+    fraction = {q: len(p) / qlen[q] for q, p in covered.items() if qlen.get(q)}
+    found = sorted(q for q, f in fraction.items() if f >= config["min_cov"])
+
+    detail = {"present": bool(found), "flanks_found": found,
+              "coverage": {q: round(f, 3) for q, f in sorted(fraction.items())},
+              "interflank_span": None}
+    # Both flanks on one contig: the gap between them is the cassette's seat.
+    if len(found) == 2:
+        (c1, l1, h1), (c2, l2, h2) = (span[found[0]], span[found[1]])
+        if c1 == c2:
+            detail["interflank_span"] = max(0, max(l1, l2) - min(h1, h2))
+    return detail
+
+
 def alignment_columns(qseq: str, sseq: str, qstart: int, sstart: int = 1, send: int = 1):
     """Walk a gapped HSP, yielding (qpos, spos, qchar, schar) per column.
 
