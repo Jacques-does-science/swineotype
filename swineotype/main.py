@@ -19,6 +19,7 @@ from pathlib import Path
 from swineotype import __version__
 from swineotype.stages import (
     RESOLVABLE_FAMILIES,
+    cps_flank_probe,
     family_label,
     interpret_resolver,
     pair_of,
@@ -109,8 +110,28 @@ def process_one(assembly: str, out_dir: Path, threads: int, config: dict,
     # came back as "Streptococcus suis". Reference metadata is not an
     # identification of the input, and no match is not an identification at all.
     if s1_top is None and not s1.get("top_wzx_only"):
-        return row("NO_CPS_MATCH", matched_taxon=None,
-                   warnings=["no_cps_reference_matched"])
+        # "Nothing matched" was two different findings wearing one label. An
+        # S. suis genome whose cassette this panel does not carry -- a novel
+        # cps locus -- looked exactly like an unrelated organism or an empty
+        # file. The conserved flanking region tells them apart: present means
+        # the cps region is there and could not be typed, which is a lead;
+        # absent means there is nothing here of the kind.
+        flank = cps_flank_probe(assembly, config["cps_flank_fasta"], threads,
+                                run_dir, config)
+        if not flank["present"]:
+            return row("NO_CPS_MATCH", matched_taxon=None,
+                       warnings=["no_cps_reference_matched",
+                                 "no_cps_flanking_region"])
+        notes = ["no_cps_reference_matched",
+                 f"cps_flanking_region_present:{'+'.join(flank['flanks_found'])}"]
+        # The flanks are chromosomal and survive a deleted cassette, so their
+        # presence alone says nothing about what sits between them. Only a
+        # measured span does, and only when both landed on one contig.
+        span = flank["interflank_span"]
+        notes.append(f"interflank_span={span}" if span is not None
+                     else "interflank_span_not_assessed")
+        notes.append("cps_cassette_not_matched_by_panel")
+        return row("CPS_REGION_UNTYPED", matched_taxon=None, warnings=notes)
 
     # cps genes are present but no reference *wzy* matched. That establishes
     # only that no qualifying reference wzy was found -- NOT that the isolate
@@ -336,7 +357,11 @@ def main(assembly, out_dir, merged_csv, threads, species, input_species, config)
                 click.echo(f"[WARN] {fname} => {row['family_serotype']} "
                            f"(family only; exact resolution withheld: {row['stage2_status']})", err=True)
             elif status == "NO_CPS_MATCH":
-                click.echo(f"[WARN] {fname} => no cps reference matched; no species inferred", err=True)
+                click.echo(f"[WARN] {fname} => no cps reference matched and no cps "
+                           f"flanking region found; no species inferred", err=True)
+            elif status == "CPS_REGION_UNTYPED":
+                click.echo(f"[WARN] {fname} => cps flanking region present but no "
+                           f"reference type matched; the cassette is not in the panel", err=True)
             elif status == "NO_WZY_MATCH":
                 click.echo(f"[WARN] {fname} => no reference wzy matched "
                            f"(nearest wzx: cps type {row['stage1_wzx_only']}); "

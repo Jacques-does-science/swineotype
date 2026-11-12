@@ -19,9 +19,15 @@ def patched_stages(monkeypatch):
     """Patch process_one's collaborators. Yields a setter."""
     from swineotype import main as main_mod
 
-    def setup(s1, s2=None, forbid_stage2=False):
+    def setup(s1, s2=None, forbid_stage2=False, flank=None):
         monkeypatch.setattr(main_mod, "stage1_score", lambda *a, **k: s1)
         monkeypatch.setattr(main_mod, "ensure_unix_line_endings", lambda p, t: p)
+        # Default: no flanking region. The probe runs only when Stage 1 matched
+        # nothing, and "nothing there at all" is the right default for a test
+        # that is not about the flank.
+        monkeypatch.setattr(main_mod, "cps_flank_probe", lambda *a, **k: flank or
+                            {"present": False, "flanks_found": [], "coverage": {},
+                             "interflank_span": None})
         if forbid_stage2:
             monkeypatch.setattr(main_mod, "stage2_resolver_call",
                                 lambda *a, **k: pytest.fail("Stage 2 must not run here"))
