@@ -416,8 +416,15 @@ seen:
 - `interflank_span=<n>` — when both landed on one contig, the sequence between them. This
   is the one measurement bearing on whether a cassette is there: a span of locus size
   means something sits in the seat, a span near zero means the locus is deleted.
-- `interflank_span_not_assessed` — the usual outcome on a draft assembly, where the two
-  flanks fall on different contigs. Nothing is claimed.
+  Across 110 short-read drafts (PRJNA1295417) a span was obtained in 43, and where it was,
+  it proved characteristic of the serotype: 27 serotype-9 genomes assembled from separate
+  read sets agreed to within 4 bp (23,737–23,741), and six serotype-2 genomes gave
+  38,030–38,980. That is a by-product, not a typing method, but it is evidence the number
+  means something.
+- `interflank_span_not_assessed` — the two flanks fell on different contigs, so nothing is
+  claimed. This is about assembly contiguity and nothing else: in the 110 drafts above, the
+  genomes yielding no span had a median N50 of 58,873 bp against 92,998 bp for those that
+  did. Read no significance into its absence for a particular sample.
 
 Follow one up the same way as `NO_WZY_MATCH` below. `cpsflank_vs_asm.tsv` in the sample's
 directory gives the flank coordinates, which bracket the region to extract.
@@ -500,9 +507,10 @@ matches nothing, to separate `CPS_REGION_UNTYPED` from `NO_CPS_MATCH`.
 The two windows were chosen empirically, not from an annotation: the 50 kb around the
 05ZYH33 *cps* locus was aligned against assemblies spanning serotypes 3, 7, 9, 16 and 28
 plus an untypable isolate, and the blocks present in all of them were kept. Checked
-against 109 independently assembled *S. suis* genomes (Osei et al. 2026, PRJNA1295417),
-both probes are covered at >= 80% in 108; the exception is an isolate at 85.9% ANI to
-*S. suis*, i.e. outside the species. Neither probe hits any of the three shipped
+against 110 independently assembled *S. suis* genomes (Osei et al. 2026, PRJNA1295417),
+both probes are covered at >= 80% in 109, and in most at or near 100%; the single exception
+is an isolate at 85.9% ANI to *S. suis*, i.e. outside the species, which covers one probe
+at 31% and the other at 12%. Neither probe hits any of the three shipped
 *A. pleuropneumoniae* genomes.
 
 **Resolver genes** — `suis_resolver_refs.fasta`: four genes, each a verbatim slice of a
